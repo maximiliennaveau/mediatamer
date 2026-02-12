@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mediatamer"
+version = "0.1.0"
+description = "MediaTamer — organize media and extract MKV metadata for Jellyfin"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [ { name = "Maximilien Naveau" } ]
+license = { text = "MIT" }
+# No Python runtime dependencies; external tools like ffmpeg are provided by the Nix flake/devShell
+dependencies = []
+
+[project.scripts]
+organize-for-jellyfin = "mediatamer.organize:main"
+extract-mkv-metadata = "mediatamer.extract_mkv_metadata:main"
+mediatamer = "mediatamer.organize:main"
