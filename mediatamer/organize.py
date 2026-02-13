@@ -7,6 +7,11 @@ import subprocess
 from shutil import move, copy2
 from collections import defaultdict
 
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
+
 VIDEO_EXTS = {'.mp4', '.mkv', '.mov', '.avi',
               '.m4v', '.ts', '.mpg', '.mpeg', '.flv'}
 
@@ -34,6 +39,9 @@ def normalize_show_name(raw: str) -> str:
     s = re.sub(r'\bD[_ -]?\d+\b', '', s, flags=re.I)
     s = re.sub(r'\bDisc[_ -]?\d+\b', '', s, flags=re.I)
     s = re.sub(r'\s+', ' ', s).strip()
+    # Handle common abbreviations
+    if s.lower() == 'dr who':
+        s = 'Doctor Who'
     return s.title() if s else 'Unknown Show'
 
 
@@ -138,8 +146,6 @@ def main():
                         help="Move files instead of copying when --apply is used")
     parser.add_argument("--exts", nargs="*",
                         help="Video extensions to include (example: .mp4 .mkv)")
-    parser.add_argument("--number-missing", action="store_true",
-                        help="If episode not found, assign sequential episode numbers per season")
     args = parser.parse_args()
 
     input_root = args.input.resolve()
@@ -158,6 +164,7 @@ def main():
 
     groups = defaultdict(list)
     file_infos = []
+    planned_dests = set()
 
     for p in sorted(files):
         filename = p.name
@@ -165,37 +172,60 @@ def main():
         show_guess, season_from_parent = find_parent_show_and_season(
             p, input_root)
 
-        season, ep_start, ep_end = extract_se_ep_from_name(filename)
-
         tags = ffprobe_tags(p)
+
+        # Prioritize metadata from file tags
+        show = None
+        season = None
+        ep_start = None
+        ep_end = None
+
         if tags:
-            show_tag = tags.get('show') or tags.get(
-                'series') or tags.get('album') or tags.get('title')
+            # Extract show name from tags
+            show_tag = tags.get('show') or tags.get('series')
             if show_tag:
-                show_guess = normalize_show_name(show_tag)
+                show = normalize_show_name(show_tag)
+
+            # Extract season from tags
             season_tag = int_from_tag(
                 tags.get('season_number') or tags.get('season'))
-            episode_tag = int_from_tag(tags.get('episode_id') or tags.get(
-                'episode_number') or tags.get('episode') or tags.get('track'))
             if season_tag is not None:
                 season = season_tag
+
+            # Extract episode from tags
+            episode_tag = int_from_tag(tags.get('episode_id') or tags.get(
+                'episode_number') or tags.get('episode') or tags.get('track'))
             if episode_tag is not None:
                 ep_start = episode_tag
                 ep_end = None
 
+        # Fallback to filename/path hints if metadata not in file
+        if show is None:
+            show = show_guess
+
         if season is None:
-            season = season_from_parent
-        if season is None:
-            season = extract_season_only(p.parent.name)
+            # Try filename first
+            season_temp, _, _ = extract_se_ep_from_name(filename)
+            if season_temp is not None:
+                season = season_temp
+            elif season_from_parent is not None:
+                season = season_from_parent
+            else:
+                season = extract_season_only(p.parent.name)
+
+        if ep_start is None:
+            season_temp, ep_start, ep_end = extract_se_ep_from_name(filename)
+            if season is None and season_temp is not None:
+                season = season_temp
 
         file_infos.append({
             'path': p,
-            'show': show_guess,
+            'show': show,
             'season': season,
             'ep_start': ep_start,
             'ep_end': ep_end
         })
-        key = (show_guess, season if season is not None else 0)
+        key = (show, season if season is not None else 0)
         groups[key].append(p)
 
     sequential_counters = {}
@@ -223,21 +253,16 @@ def main():
             season = 1
 
         if ep_start is None:
-            if args.number_missing:
-                ep = sequential_counters[(show, season)]
-                sequential_counters[(show, season)] += 1
-                ep_start = ep
-                ep_end = None
-            else:
-                actions.append((p, None, None, f"SKIP (no episode found)"))
-                continue
+            ep = sequential_counters[(show, season)]
+            sequential_counters[(show, season)] += 1
+            ep_start = ep
+            ep_end = None
 
         season_str = zero_pad(season)
         episode_str = zero_pad(ep_start)
         episode_end_str = zero_pad(ep_end) if ep_end else None
         show_dir_name = show
         dest_dir = output_root / show_dir_name / f"Season {season_str}"
-        dest_dir.mkdir(parents=True, exist_ok=True)
         if episode_end_str and ep_end and ep_end != ep_start:
             dest_name = f"{show_dir_name} - S{season_str}E{episode_str}-E{episode_end_str}{p.suffix.lower()}"
         else:
@@ -246,10 +271,11 @@ def main():
 
         counter = 1
         candidate = dest_path
-        while candidate.exists():
+        while candidate.exists() or candidate in planned_dests:
             candidate = dest_dir / \
                 f"{show_dir_name} - S{season_str}E{episode_str} ({counter}){p.suffix.lower()}"
             counter += 1
+        planned_dests.add(candidate)
         actions.append((p, candidate, args.move if args.apply else None,
                        "MOVE" if args.apply and args.move else ("COPY" if args.apply else "DRY")))
 
@@ -257,7 +283,7 @@ def main():
     for src, dest, move_flag, action in actions:
         if dest is None:
             print(
-                f"  SKIP: {src} -> no episode detected (use --number-missing to auto-assign)")
+                f"  SKIP: {src} -> no episode detected")
         else:
             print(f"  {action}: {src} -> {dest}")
 

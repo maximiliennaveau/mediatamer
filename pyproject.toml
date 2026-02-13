@@ -11,7 +11,9 @@ requires-python = ">=3.8"
 authors = [ { name = "Maximilien Naveau" } ]
 license = { text = "MIT" }
 # No Python runtime dependencies; external tools like ffmpeg are provided by the Nix flake/devShell
-dependencies = []
+dependencies = [
+  "argcomplete"
+]
 
 [project.scripts]
 mediatamer = "mediatamer.cli:main"
