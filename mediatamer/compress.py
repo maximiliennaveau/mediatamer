@@ -89,11 +89,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compress video files for optimal Jellyfin streaming on DS418 NAS")
     parser.add_argument("--input", "-i", type=Path,
-                        default=Path.cwd(), help="Input root to scan")
+                        required=True, help="Input directory to scan")
     parser.add_argument("--output", "-o", type=Path,
                         default=Path.cwd() / "compressed", help="Output root")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Dry run, print commands without executing")
+    parser.add_argument("--apply", action="store_true",
+                        help="Actually move/copy files. If not set, runs as dry-run and prints actions")
     parser.add_argument("--no-embedded", action="store_true",
                         help="Do not include embedded subtitles")
     parser.add_argument("--exts", nargs="*",
@@ -125,7 +125,8 @@ def main():
     for infile in sorted(files):
         rel_path = infile.relative_to(input_dir)
         outfile = output_dir / rel_path.with_suffix('.mkv')
-        outfile.parent.mkdir(parents=True, exist_ok=True)
+        if args.apply:
+            outfile.parent.mkdir(parents=True, exist_ok=True)
 
         base = infile.with_suffix('')
         srtfile = find_external_srt(base)
@@ -136,7 +137,7 @@ def main():
         cmd = build_handbrake_cmd(infile, outfile, srtfile, embedded_sub)
 
         print(f"Converting: {infile} -> {outfile}")
-        if args.dry_run:
+        if not args.apply:
             print(f"DRY RUN: {' '.join(cmd)}")
         else:
             result = subprocess.run(cmd)

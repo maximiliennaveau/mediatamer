@@ -40,6 +40,9 @@
         packages = [
           self.packages."${system}".default
         ];
+        shellHook = ''
+          eval "$(register-python-argcomplete mediatamer)"
+        '';
       };
 
       defaultPackage = self.packages."${system}".default;

@@ -55,11 +55,11 @@ def create_parser():
     compress_parser = subparsers.add_parser(
         "compress", help="Compress video files for optimal streaming")
     compress_parser.add_argument(
-        "input", type=str, help="Input directory to scan")
+        "--input", "-i", type=str, required=True, help="Input directory to scan")
     compress_parser.add_argument(
         "--output", "-o", type=str, help="Output directory")
     compress_parser.add_argument(
-        "--dry-run", action="store_true", help="Dry run")
+        "--apply", action="store_true", help="Actually compress files")
     compress_parser.add_argument(
         "--no-embedded", action="store_true", help="Do not include embedded subtitles")
     compress_parser.add_argument("--exts", nargs="*", help="Video extensions")
