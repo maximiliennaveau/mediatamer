@@ -72,11 +72,10 @@ def build_handbrake_cmd(infile: Path, outfile: Path, srtfile: Optional[Path], em
         '-f', 'mkv',
         '-e', 'x264',  # H.264 for lower CPU usage
         '-q', '20',    # CRF 20
-        '-r', 'same',  # Same framerate
-        '--pfr',       # Constant framerate
-        '-a', '1',     # First audio track
-        '-E', 'av_aac',  # AAC
-        '-B', '192'    # 192 kbps
+        '-a', '1,2,3',   # First and second audio tracks
+        '-E', 'av_aac,av_aac,av_aac',  # AAC for all three
+        '-B', '192,192,192',  # 192 kbps for all three
+        '-s', '1,2,3'      # Include first subtitle track if available
     ]
     if srtfile:
         cmd.extend(['--srt-file', str(srtfile), '--srt-lang', 'eng'])
@@ -85,9 +84,7 @@ def build_handbrake_cmd(infile: Path, outfile: Path, srtfile: Optional[Path], em
     return cmd
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Compress video files for optimal Jellyfin streaming on DS418 NAS")
+def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--input", "-i", type=Path,
                         required=True, help="Input directory to scan")
     parser.add_argument("--output", "-o", type=Path,
@@ -98,6 +95,14 @@ def main():
                         help="Do not include embedded subtitles")
     parser.add_argument("--exts", nargs="*",
                         help="Video extensions to process")
+    argcomplete.autocomplete(parser)
+    return parser
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Compress video files for optimal Jellyfin streaming on DS418 NAS")
+    parser = get_agument_parser(parser)
     args = parser.parse_args()
 
     input_dir = args.input.resolve()

@@ -12,7 +12,8 @@ authors = [ { name = "Maximilien Naveau" } ]
 license = { text = "MIT" }
 # No Python runtime dependencies; external tools like ffmpeg are provided by the Nix flake/devShell
 dependencies = [
-  "argcomplete"
+  "argcomplete",
+  "requests"
 ]
 
 [project.scripts]

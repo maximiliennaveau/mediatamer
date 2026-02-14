@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import sys
 import importlib
-
-try:
-    import argcomplete
-except ImportError:
-    argcomplete = None
-
+import argcomplete
 import argparse
+from mediatamer.organize import get_argument_parser as get_organize_parser
+from mediatamer.compress import get_agument_parser as get_compress_parser
+from mediatamer.metadata import get_agument_parser as get_metadata_parser
 
 
 def _call_module_main(module_name: str, argv: list[str]) -> int | None:
@@ -41,31 +39,17 @@ def create_parser():
     # Organize command
     organize_parser = subparsers.add_parser(
         "organize", help="Organize video files into Jellyfin layout")
-    organize_parser.add_argument(
-        "--input", "-i", type=str, help="Input root to scan")
-    organize_parser.add_argument(
-        "--output", "-o", type=str, help="Output root")
-    organize_parser.add_argument(
-        "--apply", action="store_true", help="Actually move/copy files")
-    organize_parser.add_argument(
-        "--move", action="store_true", help="Move files instead of copying")
-    organize_parser.add_argument("--exts", nargs="*", help="Video extensions")
+    organize_parser = get_organize_parser(organize_parser)
 
     # Compress command
     compress_parser = subparsers.add_parser(
         "compress", help="Compress video files for optimal streaming")
-    compress_parser.add_argument(
-        "--input", "-i", type=str, required=True, help="Input directory to scan")
-    compress_parser.add_argument(
-        "--output", "-o", type=str, help="Output directory")
-    compress_parser.add_argument(
-        "--apply", action="store_true", help="Actually compress files")
-    compress_parser.add_argument(
-        "--no-embedded", action="store_true", help="Do not include embedded subtitles")
-    compress_parser.add_argument("--exts", nargs="*", help="Video extensions")
+    compress_parser = get_compress_parser(compress_parser)
 
     # Metadata command
-    subparsers.add_parser("metadata", help="Extract MKV metadata")
+    metadata_parser = subparsers.add_parser(
+        "metadata", help="Extract MKV metadata to JSON and CSV")
+    metadata_parser = get_metadata_parser(metadata_parser)
 
     return parser
 

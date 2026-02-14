@@ -23,10 +23,11 @@
           pkgs.python3Packages.wheel
           pkgs.python3Packages.argcomplete
         ];
-        buildInputs = [
+        propagatedBuildInputs = [
           pkgs.ffmpeg
           pkgs.handbrake
           pkgs.python3Packages.argcomplete
+          pkgs.python3Packages.requests
         ];
         pyproject = true;
         meta = with pkgs.lib; {

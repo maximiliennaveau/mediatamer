@@ -1,141 +1,31 @@
-"""Organize module for MediaTamer (copied from jellyfin_tools.organize)."""
+"""Organize module for MediaTamer."""
 from pathlib import Path
-import re
 import argparse
-import json
-import subprocess
 from shutil import move, copy2
 from collections import defaultdict
+import argcomplete
 
-try:
-    import argcomplete
-except ImportError:
-    argcomplete = None
-
-VIDEO_EXTS = {'.mp4', '.mkv', '.mov', '.avi',
-              '.m4v', '.ts', '.mpg', '.mpeg', '.flv'}
-
-SE_EP_PATTERNS = [
-    re.compile(
-        r'[Ss](?P<season>\d{1,2})[ ._-]?[Ee](?P<ep1>\d{1,2})(?:[ ._-]*[-–—&][ ._-]*(?P<ep2>\d{1,2}))?'),
-    re.compile(
-        r'(?P<season>\d{1,2})[xX](?P<ep1>\d{1,2})(?:[-](?P<ep2>\d{1,2}))?'),
-    re.compile(
-        r'[Ss]eason[ ._-]?(?P<season>\d{1,2}).*?[Ee]p(?:isode)?[ ._-]?(?P<ep1>\d{1,2})(?:[ ._-]*[-–—&][ ._-]*(?P<ep2>\d{1,2}))?', re.I),
-    re.compile(
-        r'\b[Ee]p(?:isode)?[ ._-]?(?P<ep1>\d{1,2})(?:[ ._-]*[-–—&][ ._-]*(?P<ep2>\d{1,2}))?\b'),
-    re.compile(r'\b(?P<ep1>\d{2})[-–—](?P<ep2>\d{2})\b'),
-    re.compile(r'\b(?P<ep1>\d{2})\b')
-]
-
-SEASON_ONLY_PAT = re.compile(
-    r'[Ss](?P<season>\d{1,2})|Season[ ._-]?(?P<season2>\d{1,2})', re.I)
+from .metadata import (
+    extract_metadata
+)
+from .parameters import get_extensions
 
 
-def normalize_show_name(raw: str) -> str:
-    s = raw.replace('_', ' ').replace('.', ' ').strip()
-    s = re.sub(r'\b[Ss]\d{1,2}\b', '', s)
-    s = re.sub(r'\bDVD[_ -]?\d+\b', '', s, flags=re.I)
-    s = re.sub(r'\bD[_ -]?\d+\b', '', s, flags=re.I)
-    s = re.sub(r'\bDisc[_ -]?\d+\b', '', s, flags=re.I)
-    s = re.sub(r'\s+', ' ', s).strip()
-    # Handle common abbreviations
-    if s.lower() == 'dr who':
-        s = 'Doctor Who'
-    return s.title() if s else 'Unknown Show'
-
-
-def extract_se_ep_from_name(name: str):
-    lname = name
-    for pat in SE_EP_PATTERNS:
-        m = pat.search(lname)
-        if m:
-            gd = m.groupdict()
-            season = None
-            if 'season' in gd and gd.get('season'):
-                try:
-                    season = int(gd.get('season'))
-                except Exception:
-                    season = None
-            ep1 = None
-            ep2 = None
-            if gd.get('ep1'):
-                try:
-                    ep1 = int(gd.get('ep1'))
-                except Exception:
-                    ep1 = None
-            if gd.get('ep2'):
-                try:
-                    ep2 = int(gd.get('ep2'))
-                except Exception:
-                    ep2 = None
-            return (season, ep1, ep2)
-
-    if re.search(r'\b(special|sp|bonus|extra|ova|feature)\b', lname, re.I):
-        m = re.search(r'(?:special|sp)[^0-9]*(\d{1,2})', lname, re.I)
-        ep = int(m.group(1)) if m else None
-        return (0, ep, None)
-
-    return (None, None, None)
-
-
-def extract_season_only(name: str):
-    m = SEASON_ONLY_PAT.search(name)
-    if m:
-        season = m.groupdict().get('season') or m.groupdict().get('season2')
-        if season:
-            return int(season)
-    return None
-
-
-def find_parent_show_and_season(file_path: Path, input_root: Path):
-    rel = file_path.relative_to(input_root)
-    parts = rel.parts
-    if len(parts) >= 2:
-        top_dir = parts[0]
-    else:
-        top_dir = file_path.parent.name
-    show_guess = normalize_show_name(top_dir)
-    season = None
-    p = file_path.parent
-    while p != input_root and p != p.parent:
-        s = extract_season_only(p.name)
-        if s:
-            season = s
-            break
-        p = p.parent
-    return show_guess, season
-
-
-def ffprobe_tags(path: Path):
-    try:
-        cmd = ["ffprobe", "-v", "error", "-print_format",
-               "json", "-show_format", str(path)]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            return {}
-        j = json.loads(res.stdout)
-        return {k.lower(): v for k, v in (j.get('format', {}).get('tags') or {}).items()}
-    except Exception:
-        return {}
-
-
-def int_from_tag(val):
-    if val is None:
-        return None
-    try:
-        return int(re.search(r"\d+", str(val)).group())
-    except Exception:
-        return None
+def sanitize_filename(name: str) -> str:
+    """Sanitize string for use in filenames."""
+    import re
+    # Replace invalid chars with space or dash
+    name = re.sub(r'[<>:"/\\|?*]', '-', name)
+    # Collapse multiple spaces/dashes
+    name = re.sub(r'[- ]+', ' ', name).strip()
+    return name
 
 
 def zero_pad(n):
     return f"{n:02d}"
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Organize video files into Jellyfin layout (Show/Season XX/Show - SXXEXX.ext)")
+def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--input", "-i", type=Path,
                         default=Path.cwd(), help="Input root to scan")
     parser.add_argument("--output", "-o", type=Path,
@@ -146,7 +36,19 @@ def main():
                         help="Move files instead of copying when --apply is used")
     parser.add_argument("--exts", nargs="*",
                         help="Video extensions to include (example: .mp4 .mkv)")
+    parser.add_argument("--tmdb-api-key", type=str,
+                        help="TMDB API key for episode title lookup")
+    return parser
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Organize video files into Jellyfin layout (Show/Season XX/Show - SXXEXX.ext - Title)")
+    parser = get_argument_parser(parser)
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
+
+    check_ffprobe()
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
@@ -154,7 +56,7 @@ def main():
         exts = {e.lower() if e.startswith(
             '.') else f".{e.lower()}" for e in args.exts}
     else:
-        exts = VIDEO_EXTS
+        exts = {e if e.startswith('.') else f".{e}" for e in get_extensions()}
 
     files = [p for p in input_root.rglob(
         "*") if p.suffix.lower() in exts and p.is_file()]
@@ -162,80 +64,38 @@ def main():
         print("No video files found under", input_root)
         return
 
-    groups = defaultdict(list)
     file_infos = []
     planned_dests = set()
 
     for p in sorted(files):
-        filename = p.name
-        name_no_ext = p.stem
-        show_guess, season_from_parent = find_parent_show_and_season(
-            p, input_root)
+        # Use extract_metadata from metadata.py for all metadata extraction
+        meta = extract_metadata(p, input_root, args.tmdb_api_key)
 
-        tags = ffprobe_tags(p)
-
-        # Prioritize metadata from file tags
-        show = None
-        season = None
-        ep_start = None
-        ep_end = None
-
-        if tags:
-            # Extract show name from tags
-            show_tag = tags.get('show') or tags.get('series')
-            if show_tag:
-                show = normalize_show_name(show_tag)
-
-            # Extract season from tags
-            season_tag = int_from_tag(
-                tags.get('season_number') or tags.get('season'))
-            if season_tag is not None:
-                season = season_tag
-
-            # Extract episode from tags
-            episode_tag = int_from_tag(tags.get('episode_id') or tags.get(
-                'episode_number') or tags.get('episode') or tags.get('track'))
-            if episode_tag is not None:
-                ep_start = episode_tag
-                ep_end = None
-
-        # Fallback to filename/path hints if metadata not in file
-        if show is None:
-            show = show_guess
-
-        if season is None:
-            # Try filename first
-            season_temp, _, _ = extract_se_ep_from_name(filename)
-            if season_temp is not None:
-                season = season_temp
-            elif season_from_parent is not None:
-                season = season_from_parent
-            else:
-                season = extract_season_only(p.parent.name)
-
-        if ep_start is None:
-            season_temp, ep_start, ep_end = extract_se_ep_from_name(filename)
-            if season is None and season_temp is not None:
-                season = season_temp
+        title = sanitize_filename(meta.get('episode_title', '')) if meta.get(
+            'episode_title') else ''
 
         file_infos.append({
             'path': p,
-            'show': show,
-            'season': season,
-            'ep_start': ep_start,
-            'ep_end': ep_end
+            'show': meta.get('show_name'),
+            'season': meta.get('season'),
+            'ep_start': meta.get('episode_start'),
+            'ep_end': meta.get('episode_end'),
+            'title': title
         })
-        key = (show, season if season is not None else 0)
-        groups[key].append(p)
+
+    # Group files by show and season for sequential numbering
+    groups = defaultdict(list)
+    for fi in file_infos:
+        key = (fi['show'], fi['season'] if fi['season'] is not None else 0)
+        groups[key].append(fi['path'])
 
     sequential_counters = {}
     for (show, season), plist in groups.items():
         existing = []
         for p in plist:
             for fi in file_infos:
-                if fi['path'] == p:
-                    if fi.get('ep_start'):
-                        existing.append(fi.get('ep_start'))
+                if fi['path'] == p and fi.get('ep_start'):
+                    existing.append(fi.get('ep_start'))
                     break
         counter = 1
         if existing:
@@ -249,6 +109,7 @@ def main():
         season = fi['season']
         ep_start = fi.get('ep_start')
         ep_end = fi.get('ep_end')
+
         if season is None:
             season = 1
 
@@ -266,7 +127,8 @@ def main():
         if episode_end_str and ep_end and ep_end != ep_start:
             dest_name = f"{show_dir_name} - S{season_str}E{episode_str}-E{episode_end_str}{p.suffix.lower()}"
         else:
-            dest_name = f"{show_dir_name} - S{season_str}E{episode_str}{p.suffix.lower()}"
+            title_part = f" - {fi['title']}" if fi.get('title') else ""
+            dest_name = f"{show_dir_name} - S{season_str}E{episode_str}{title_part}{p.suffix.lower()}"
         dest_path = dest_dir / dest_name
 
         counter = 1
