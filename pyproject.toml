@@ -13,7 +13,9 @@ license = { text = "MIT" }
 # No Python runtime dependencies; external tools like ffmpeg are provided by the Nix flake/devShell
 dependencies = [
   "argcomplete",
-  "requests"
+  "requests",
+  "pytesseract",
+  "pillow",
 ]
 
 [project.scripts]

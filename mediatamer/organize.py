@@ -6,7 +6,7 @@ from collections import defaultdict
 import argcomplete
 
 from .metadata import (
-    extract_metadata
+    check_ffprobe, extract_metadata
 )
 from .parameters import get_extensions
 
@@ -35,6 +35,7 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
     parser.add_argument("--move", action="store_true",
                         help="Move files instead of copying when --apply is used")
     parser.add_argument("--exts", nargs="*",
+                        default=get_extensions(),
                         help="Video extensions to include (example: .mp4 .mkv)")
     parser.add_argument("--tmdb-api-key", type=str,
                         help="TMDB API key for episode title lookup")

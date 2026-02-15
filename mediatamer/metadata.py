@@ -186,7 +186,7 @@ def parse_special_season(name: str) -> Optional[float]:
     return None
 
 
-def lookup_episode_info(show_name: str, season: int, episode: int, api_key: str = None):
+def lookup_episode_info(show_name: str, season: int, episode: int, api_key: str = None, language: str = 'en-US'):
     """Look up episode information from TMDB API."""
     if not requests:
         print("Warning: requests not available, skipping web lookup")
@@ -202,7 +202,8 @@ def lookup_episode_info(show_name: str, season: int, episode: int, api_key: str 
         params = {
             'api_key': api_key,
             'query': show_name,
-            'first_air_date_year': None  # Could be enhanced to filter by year
+            'first_air_date_year': None,  # Could be enhanced to filter by year
+            'language': language
         }
         response = requests.get(search_url, params=params, timeout=10)
         response.raise_for_status()
@@ -218,7 +219,7 @@ def lookup_episode_info(show_name: str, season: int, episode: int, api_key: str 
 
         # Get episode details
         episode_url = f"https://api.themoviedb.org/3/tv/{show_id}/season/{season}/episode/{episode}"
-        params = {'api_key': api_key}
+        params = {'api_key': api_key, 'language': language}
         response = requests.get(episode_url, params=params, timeout=10)
         response.raise_for_status()
         episode_data = response.json()
@@ -293,7 +294,7 @@ def stream_info_summary(stream: Dict[str, Any]) -> Dict[str, Any]:
     return info
 
 
-def extract_metadata(path: Path, input_root: Path = None, api_key: str = None) -> Dict[str, Any]:
+def extract_metadata(path: Path, input_root: Path = None, api_key: str = None, language: str = 'en-US') -> Dict[str, Any]:
     """Extract comprehensive metadata including technical and content information."""
     j = ffprobe_json(path)
     out = {}
@@ -360,7 +361,8 @@ def extract_metadata(path: Path, input_root: Path = None, api_key: str = None) -
             out['episode_title'] = embedded_title
         elif api_key and show_name and season and ep1:
             # Try web lookup
-            web_info = lookup_episode_info(show_name, season, ep1, api_key)
+            web_info = lookup_episode_info(
+                show_name, season, ep1, api_key, language)
             if web_info and web_info.get('title'):
                 out['episode_title'] = web_info['title']
                 out['episode_overview'] = web_info.get('overview', '')
@@ -459,6 +461,8 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
                         help="Extensions to scan (default .mkv)")
     parser.add_argument("--tmdb-api-key", type=str,
                         help="TMDB API key for episode title lookup")
+    parser.add_argument("--language", type=str, default='en-US',
+                        help="Language for TMDB lookup (e.g., fr-FR, en-US)")
     return parser
 
 
@@ -482,7 +486,8 @@ def main():
     rows = []
     for f in files:
         try:
-            meta = extract_metadata(f, input_dir, args.tmdb_api_key)
+            meta = extract_metadata(
+                f, input_dir, args.tmdb_api_key, args.language)
         except Exception as e:
             print(f"Error extracting metadata for {f}: {e}")
             continue

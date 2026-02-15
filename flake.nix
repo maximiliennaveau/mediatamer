@@ -21,19 +21,26 @@
           pkgs.python3
           pkgs.python3Packages.setuptools
           pkgs.python3Packages.wheel
-          pkgs.python3Packages.argcomplete
+        ];
+        nativeCheckInputs = [
+          pkgs.python3Packages.pytestCheckHook
         ];
         propagatedBuildInputs = [
           pkgs.ffmpeg
           pkgs.handbrake
+          pkgs.tesseract
           pkgs.python3Packages.argcomplete
           pkgs.python3Packages.requests
+          pkgs.python3Packages.pytesseract
+          pkgs.python3Packages.pillow
         ];
         pyproject = true;
         meta = with pkgs.lib; {
           description = "MediaTamer — organize media and extract MKV metadata";
           license = licenses.mit;
         };
+        doCheck = true;
+        pythonImportsCheck = [ "mediatamer" ];
       };
 
       devShells."${system}".default = pkgs.mkShell {
