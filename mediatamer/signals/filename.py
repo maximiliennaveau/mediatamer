@@ -13,6 +13,7 @@ def parse_filename(path: Path) -> Dict[str, Any]:
         'show': None,
         'season': None,
         'episode': None,
+        'episode_is_explicit': False,
         'title': None,
         'source': 'filename',
         'confidence': 0.0,
@@ -31,6 +32,7 @@ def parse_filename(path: Path) -> Dict[str, Any]:
             out['episode'] = ep[0]
         elif ep:
             out['episode'] = ep
+        out['episode_is_explicit'] = True if out['episode'] else False
         out['title'] = gi.get('episode_title') or gi.get('title')
         out['confidence'] = float(gi.get('confidence', 0.0)) if gi.get(
             'confidence') is not None else 0.0
@@ -50,15 +52,37 @@ def parse_filename(path: Path) -> Dict[str, Any]:
         if m:
             try:
                 out['episode'] = int(m.group(1)) + 1
+                out['episode_is_explicit'] = False
                 out['confidence'] += 0.3
             except Exception:
                 pass
-        # infer show from parent dir if looks like Doctor_Who or similar
+        
+        # Infer show and season from parent dir
         p = path.parent
         if p:
             pn = p.name
-            if 'doctor' in pn.lower() or 'who' in pn.lower():
-                out['show'] = 'Doctor Who'
-                out['confidence'] += 0.2
+            
+            # Robust pattern: Show_S9_DVD1 or Similar
+            m = re.search(r'(.+?)_?[sS](\d+)(?:_?[dD][vV][dD](\d+))?', pn, re.I)
+            if m:
+                raw_show = m.group(1).replace('_', ' ')
+                out['season'] = int(m.group(2))
+                
+                # Special case normalization
+                if raw_show.lower() in ('dr who', 'doctor who'):
+                    out['show'] = 'Doctor Who'
+                else:
+                    out['show'] = raw_show.title()
+                out['confidence'] += 0.4
+            else:
+                # Basic fallback if regex fails
+                if 'doctor' in pn.lower() or 'who' in pn.lower():
+                    out['show'] = 'Doctor Who'
+                    out['confidence'] += 0.1
+                
+                m2 = re.search(r'[sS](\d+)', pn)
+                if m2:
+                    out['season'] = int(m2.group(1))
+                    out['confidence'] += 0.1
 
     return out

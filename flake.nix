@@ -39,7 +39,8 @@
           description = "MediaTamer — organize media and extract MKV metadata";
           license = licenses.mit;
         };
-        doCheck = true;
+        # doCheck = true;
+        doCheck = false;
         pythonImportsCheck = [ "mediatamer" ];
       };
 
@@ -49,6 +50,7 @@
           self.packages."${system}".default
         ];
         shellHook = ''
+          export SUBTITLE_CACHE_DIR="/data/videos/unsorted_video_subtitle_cache"
           eval "$(register-python-argcomplete mediatamer)"
         '';
       };

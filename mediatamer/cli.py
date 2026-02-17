@@ -14,7 +14,8 @@ import argparse
 from mediatamer.organize import get_argument_parser as get_organize_parser
 from mediatamer.compress import get_agument_parser as get_compress_parser
 from mediatamer.metadata import get_agument_parser as get_metadata_parser
-from mediatamer.get_dvd_metadata import main as get_dvd_metadata_main
+from mediatamer.get_tv_shows_metadata import main as get_tv_metadata_main
+from mediatamer.get_tv_shows_metadata import get_argument_parser as get_tv_metadata_parser
 
 
 def _call_module_main(module_name: str, argv: list[str]) -> int | None:
@@ -52,15 +53,10 @@ def create_parser():
         "metadata", help="Extract MKV metadata to JSON and CSV")
     metadata_parser = get_metadata_parser(metadata_parser)
 
-    # DVD Metadata command
-    dvd_parser = subparsers.add_parser(
-        "dvd-metadata", help="Extract DVD metadata for Doctor Who episodes")
-    dvd_parser.add_argument("dvd_dir", type=str, help="DVD directory to parse")
-    dvd_parser.add_argument("--tmdb-api-key", type=str, help="TMDB API key")
-    dvd_parser.add_argument("--language", type=str,
-                            default='fr-FR', help="Language for titles")
-    dvd_parser.add_argument("--dry-run", action="store_true",
-                            help="Do not write metadata files, only review plan")
+    # TV Metadata command (New name)
+    tv_parser = subparsers.add_parser(
+        "tv-metadata", help="Extract TV Show metadata")
+    tv_parser = get_tv_metadata_parser(tv_parser)
 
     return parser
 
@@ -81,8 +77,8 @@ def main() -> int | None:
         return _call_module_main("mediatamer.compress", sys.argv[2:])
     if cmd in ("metadata", "meta"):
         return _call_module_main("mediatamer.metadata", sys.argv[2:])
-    if cmd == "dvd-metadata":
-        return _call_module_main("mediatamer.get_dvd_metadata", sys.argv[2:])
+    if cmd in ("dvd-metadata", "tv-metadata"):
+        return _call_module_main("mediatamer.get_tv_shows_metadata", sys.argv[2:])
 
     parser.print_help()
     return 2

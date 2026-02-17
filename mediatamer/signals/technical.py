@@ -17,6 +17,7 @@ def get_technical_metadata(path: Path) -> Dict[str, Any]:
         'format_name': fmt.get('format_name'),
         'size': int(fmt.get('size')) if fmt.get('size') else None,
         'bit_rate': int(fmt.get('bit_rate')) if fmt.get('bit_rate') else None,
+        'tags': fmt.get('tags', {}),
         'streams': j.get('streams', []),
         'video': None,
         'audios': [],
