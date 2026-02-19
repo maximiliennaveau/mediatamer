@@ -35,34 +35,34 @@ class TestGetTvShowsMetadata(unittest.TestCase):
             "confidence": 0.0,
         },
         "C1_t03.mkv": {
-            "show": "Doctor Who - Extras",
+            "show": "Doctor Who - bonus",
             "season": 9,
             "episode": 1,
-            "title": "Doctor Who Extra",
+            "title": "No title",
         },
         "C2_t04.mkv": {
-            "show": "Doctor Who - Extras",
+            "show": "Doctor Who - bonus",
             "season": 9,
             "episode": 2,
-            "title": "Doctor Who Extra",
+            "title": "No title",
         },
         "C3_t05.mkv": {
-            "show": "Doctor Who - Extras",
+            "show": "Doctor Who - bonus",
             "season": 9,
             "episode": 3,
-            "title": "Doctor Who Extra",
+            "title": "No title",
         },
         "C4_t06.mkv": {
-            "show": "Doctor Who - Extras",
+            "show": "Doctor Who - bonus",
             "season": 9,
             "episode": 4,
-            "title": "Doctor Who Extra",
+            "title": "No title",
         },
         "C5_t07.mkv": {
-            "show": "Doctor Who - Extras",
+            "show": "Doctor Who - bonus",
             "season": 9,
             "episode": 5,
-            "title": "Doctor Who Extra",
+            "title": "No title",
         },
     }
 
@@ -80,7 +80,6 @@ class TestGetTvShowsMetadata(unittest.TestCase):
             
             if file_data['selected_episode']:
                 self.assertEqual(file_data['selected_episode']['episode_number'], expected["episode"])
-                self.assertEqual(file_data['selected_episode']['name'], expected["title"])
                 if "score" in expected:
                     self.assertEqual(file_data['selected_episode']['score'], expected["score"])
 

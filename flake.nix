@@ -33,6 +33,7 @@
           pkgs.python3Packages.requests
           pkgs.python3Packages.pytesseract
           pkgs.python3Packages.pillow
+          pkgs.python3Packages.langdetect
         ];
         pyproject = true;
         meta = with pkgs.lib; {

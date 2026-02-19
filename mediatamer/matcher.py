@@ -7,6 +7,57 @@ from mediatamer.signals.filename import parse_filename
 from mediatamer.signals.technical import get_technical_metadata
 from mediatamer.extract_subtitle import extract_subtitle_text, extract_credits_text
 
+
+def _detect_language(text: Optional[str]) -> Optional[str]:
+    """Detect the language of a text string using langdetect.
+
+    Returns an ISO 639-1 language code (e.g. 'fr', 'en') or None.
+    """
+    if not text or len(text.strip()) < 50:
+        return None
+    try:
+        from langdetect import detect
+        return detect(text)
+    except Exception:
+        return None
+
+
+def _lang_to_tmdb_locale(lang_code: Optional[str]) -> str:
+    """Map an ISO 639-1 code to a TMDB locale string."""
+    mapping = {
+        'fr': 'fr-FR',
+        'de': 'de-DE',
+        'es': 'es-ES',
+        'it': 'it-IT',
+        'pt': 'pt-PT',
+        'nl': 'nl-NL',
+        'ja': 'ja-JP',
+        'zh': 'zh-CN',
+        'ko': 'ko-KR',
+    }
+    return mapping.get(lang_code or '', 'en-US')
+
+
+def _parse_disc_track(filename: str) -> Optional[Dict[str, Any]]:
+    """Parse DVD disc/track structure from filenames like B2_t04.mkv.
+
+    DVD rips from MakeMKV often follow the pattern:
+        {DiscLetter}{TrackOnDisc}_t{GlobalIndex}.mkv
+    e.g.  A1_t00, A2_t01, A3_t02, B1_t03, B2_t04, B3_t05 …
+
+    The global index (tXX) is a 0-based counter across ALL discs, so:
+        t00 -> episode 1, t01 -> episode 2, t03 -> episode 4, etc.
+    This is the most reliable structural signal for episode ordering.
+    """
+    m = re.match(r'^([A-Z])(\d+)_t(\d+)', Path(filename).stem, re.I)
+    if not m:
+        return None
+    return {
+        'disc': m.group(1).upper(),
+        'track': int(m.group(2)),        # 1-based track on this disc
+        'global_index': int(m.group(3)), # 0-based index across all discs
+    }
+
 class EpisodeMatcher:
     def __init__(self, file_path: Path, tmdb_api_key: str):
         self.file_path = file_path
@@ -19,29 +70,42 @@ class EpisodeMatcher:
         self.episode_number = None
         self.best_candidate = None
         self.candidates = []
+        
+        # Hints
+        self.is_likely_episode = None # Set by caller (bool)
+        self.last_episode_matched = None # Set by caller (int)
 
     def find_metadata(self) -> None:
         """
         Orchestrate the metadata finding process:
         1. Infer Show/Season from path.
-        2. Fetch potential episodes from TMDB.
-        3. Match file against episodes.
-        4. Set attributes based on best match.
+        2. Detect subtitle language.
+        3. Fetch potential episodes from TMDB in detected language.
+        4. Match file against episodes (text + disc structure).
+        5. Set attributes based on best match.
         """
         self._infer_context()
         if self.show_name:
+            # Detect language from cached subtitles before fetching TMDB
+            sub_text = extract_subtitle_text(self.file_path, prefer_non_pgs=True)
+            credits_text = extract_credits_text(self.file_path)
+            # Cache so _match_file can reuse without re-extracting
+            self._sub_text_cache = sub_text
+            self._credits_text_cache = credits_text
+            sample = (credits_text or '') + '\n' + (sub_text or '')
+            self._detected_lang = _detect_language(sample)
+            self._tmdb_locale = _lang_to_tmdb_locale(self._detected_lang)
+            if self._detected_lang and self._detected_lang != 'en':
+                print(f"  [LANG] Detected subtitle language: {self._detected_lang} → fetching TMDB in {self._tmdb_locale}")
             self._fetch_tmdb_episodes()
-            
+
         if self.tmdb_episodes:
             self.candidates = self._match_file()
             if self.candidates:
-                # Naive best match for now, can be improved with thresholds
                 best = self.candidates[0]
-                if best['score'] >= 40: # Lowered threshold
+                if best['score'] >= 40:
                     self.best_candidate = best
                     self.episode_number = best['episode'].get('episode_number')
-                    # If we found a match, trust its season/show data if we were unsure?
-                    # For now, trust our initial context for show/season unless mismatch
     
     def _infer_context(self):
         """Infer Show Name and Season from directory structure."""
@@ -70,12 +134,19 @@ class EpisodeMatcher:
             print(f"Could not infer show name and season from {parent_dir}.")
             
     def _fetch_tmdb_episodes(self):
-        """Fetch episodes from TMDB for the identified show and season."""
+        """Fetch episodes from TMDB for the identified show and season.
+
+        Uses the detected subtitle language so that episode titles and
+        overview text are in the same language as the subtitles, enabling
+        better text-based matching.
+        """
         if not self.show_name or not self.season_number:
             return
 
+        locale = getattr(self, '_tmdb_locale', 'en-US')
+
         try:
-            # 1. Search for Show ID
+            # 1. Search for Show ID (always in English for reliability)
             search_query = self.show_name
             is_extras = " - Extras" in search_query
             if is_extras:
@@ -137,16 +208,15 @@ class EpisodeMatcher:
             #         if self.tmdb_episodes:
             #             return
 
-            # Standard Season Lookup
+            # Standard Season Lookup — fetch in detected locale for title matching
             season_url = f"https://api.themoviedb.org/3/tv/{show_id}/season/{self.season_number}"
-            resp = requests.get(season_url, params={'api_key': self.tmdb_api_key, 'language': 'en-US', 'append_to_response': 'credits'})
+            resp = requests.get(season_url, params={'api_key': self.tmdb_api_key, 'language': locale, 'append_to_response': 'credits'})
             if resp.ok:
                 episodes = resp.json().get('episodes', [])
-                # Fetch detailed credits for each episode
+                # Fetch detailed credits for each episode (crew names are language-independent)
                 for ep in episodes:
                     ep_num = ep.get('episode_number')
                     if ep_num:
-                        # Get episode credits
                         credits_url = f"https://api.themoviedb.org/3/tv/{show_id}/season/{self.season_number}/episode/{ep_num}/credits"
                         credits_resp = requests.get(credits_url, params={'api_key': self.tmdb_api_key})
                         if credits_resp.ok:
@@ -155,13 +225,12 @@ class EpisodeMatcher:
                             ep['guest_stars'] = credits_data.get('guest_stars', [])
                 self.tmdb_episodes.extend(episodes)
             
-            # If it's extras, also pull Specials (Season 0)
+            # If it's extras, also pull Specials (Season 0) in detected locale
             if is_extras or not self.tmdb_episodes:
                 spec_url = f"https://api.themoviedb.org/3/tv/{show_id}/season/0"
-                resp = requests.get(spec_url, params={'api_key': self.tmdb_api_key, 'language': 'en-US'})
+                resp = requests.get(spec_url, params={'api_key': self.tmdb_api_key, 'language': locale})
                 if resp.ok:
                     episodes = resp.json().get('episodes', [])
-                    # Fetch detailed credits for specials too
                     for ep in episodes:
                         ep_num = ep.get('episode_number')
                         if ep_num:
@@ -182,23 +251,25 @@ class EpisodeMatcher:
             return []
 
         # 1. Gather Signals
-        signals = {}
-        
         # Technical (Duration, Tags)
         tech = get_technical_metadata(self.file_path)
         duration = tech.get('duration')
         tags = tech.get('tags', {})
         embedded_title = tags.get('title')
-        
+
         # Filename
         fname_meta = parse_filename(self.file_path)
-        
-        # Subtitle Text (Try SRT first, then PGS/OCR)
-        sub_text = extract_subtitle_text(self.file_path, prefer_non_pgs=True)
-        
-        # Credits Text (targeted extraction from opening/closing)
-        credits_text = extract_credits_text(self.file_path, opening_duration=180.0, closing_duration=180.0)
-        # Note: We rely on extract_subtitle_text's internal fallback to OCR now
+
+        # Disc/Track structure  (already extracted in find_metadata, reuse)
+        disc_info = _parse_disc_track(self.file_path.name)
+
+        # Subtitle / Credits text — reuse what was fetched during language detection
+        sub_text = getattr(self, '_sub_text_cache', None)
+        credits_text = getattr(self, '_credits_text_cache', None)
+        if sub_text is None:
+            sub_text = extract_subtitle_text(self.file_path, prefer_non_pgs=True)
+        if credits_text is None:
+            credits_text = extract_credits_text(self.file_path, opening_duration=180.0, closing_duration=180.0)
 
         # 2. Score
         candidates = []
@@ -211,14 +282,49 @@ class EpisodeMatcher:
             if duration and ep_runtime:
                 ep_duration_sec = ep_runtime * 60
                 diff = abs(duration - ep_duration_sec)
-                if diff < 45:
+                if diff < 60:
                     score += 50.0
                     reasons.append(f"Duration match ({diff:.0f}s diff)")
-                elif diff < 120:
+                elif diff < 300: # 5 minutes
                     score += 20.0
+                    reasons.append(f"Loose duration match ({diff:.0f}s diff)")
+                elif diff > 900: # 15 minutes diff
+                    # Strong penalty for runtime mismatch
+                    score -= 100.0
+                    reasons.append(f"Duration mismatch ({diff/60:.1f}m diff)")
                 elif diff > 600:
-                    # Actually, if we are in main show matching, runtime is very strong.
                     score -= 50.0
+
+            # -- Categorization Hints --
+            if self.is_likely_episode is True:
+                # This file is likely a main episode
+                if int(ep.get('season_number', -1)) == 0:
+                    score -= 100.0
+                    reasons.append("Penalizing Season 0 for likely main episode file")
+                elif int(ep.get('season_number', -1)) == self.season_number:
+                    score += 30.0
+                    reasons.append(f"Rewarding Season {self.season_number} for likely main episode file")
+            elif self.is_likely_episode is False:
+                # This file is likely a bonus/extra
+                if int(ep.get('season_number', -1)) == 0:
+                    score += 50.0
+                    reasons.append("Rewarding Season 0 for likely bonus file")
+                elif int(ep.get('season_number', -1)) == self.season_number:
+                    score -= 50.0
+                    reasons.append(f"Penalizing Season {self.season_number} for likely bonus file")
+
+            # -- Sequence Signal --
+            if self.last_episode_matched is not None:
+                ep_num = ep.get('episode_number', -1)
+                # For extras (S0), sequence is still useful if they are listed in order on TMDB
+                if ep_num > self.last_episode_matched:
+                    # Reward episodes that come AFTER the last one
+                    score += 40.0
+                    reasons.append(f"Rewarding episode sequence (E{ep_num} > last E{self.last_episode_matched})")
+                elif ep_num <= self.last_episode_matched:
+                    # Penalize episodes that come BEFORE or ARE the last one
+                    score -= 40.0
+                    reasons.append(f"Penalizing out-of-order sequence (E{ep_num} <= last E{self.last_episode_matched})")
 
             # -- Filename Match --
             if fname_meta['season'] and fname_meta['episode']:
@@ -230,6 +336,26 @@ class EpisodeMatcher:
                          else:
                              score += 20.0 # Lower confidence for tXX patterns
                              reasons.append(f"Filename index '{fname_meta['episode']}' match (Guessed from tXX)")
+
+            # -- Disc/Track Structure Match --
+            # The global track index (tXX) is 0-based across all discs:
+            #   A1_t00 -> E1, A2_t01 -> E2, B1_t03 -> E4, B2_t04 -> E5 …
+            # This is a strong structural signal when text matching is
+            # unreliable (e.g. non-English subtitles).
+            if disc_info:
+                ep_num = ep.get('episode_number', -1)
+                disc = disc_info['disc']
+                disc_ord = ord(disc) - ord('A')  # A=0, B=1, C=2 …
+                global_idx = disc_info.get('global_index')
+
+                # Extras discs (C+) — skip disc structure for episode matching
+                if disc_ord < 2 and global_idx is not None:
+                    # Don't assume absolute mapping anymore. 
+                    # Just give a small bonus if the episode relative index matches?
+                    # Actually, better to just rely on other signals for now 
+                    # until we have a proper sequential matcher.
+                    pass
+
 
             # -- Extra Detection --
             if 'extra' in self.file_path.name.lower():

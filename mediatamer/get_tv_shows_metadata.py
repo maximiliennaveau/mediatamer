@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -13,7 +14,37 @@ from mediatamer.parameters import get_extensions
 from mediatamer.matcher import EpisodeMatcher
 
 
-def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', recursive: bool = False) -> Dict[str, Any]:
+def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) -> int:
+    """Find the next available bonus episode number for a show/season.
+    
+    Scan sorted_dir for files matching '{Show} - bonus S{Season}E{Number}'.
+    """
+    max_num = 0
+    if not sorted_dir or not sorted_dir.exists():
+        return 1
+        
+    # Pattern: "Doctor Who - bonus S09E01" -> match 1
+    # We look for "{show} - bonus" specifically for this mode
+    bonus_show_name = f"{show} - bonus"
+    
+    # We scan recursively or just in the show folder if it exists
+    # For now, let's scan the whole sorted_dir if it's not too big, 
+    # or just look for the show-bonus folder.
+    potential_folders = list(sorted_dir.glob(f"*{bonus_show_name}*"))
+    for folder in potential_folders:
+        for f in folder.rglob("*.mkv"):
+            # Check for SXXEXX in filename
+            m = re.search(r'[sS](\d+)[eE](\d+)', f.name)
+            if m:
+                s = int(m.group(1))
+                e = int(m.group(2))
+                if s == season:
+                    max_num = max(max_num, e)
+                    
+    return max_num + 1
+
+
+def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', recursive: bool = False, sorted_dir: Optional[Path] = None, jellyfin_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Analyze a video file or directory and return metadata plan.
     
@@ -21,7 +52,9 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
         path: File or Directory to analyze.
         api_key: TMDB API Key.
         language: Language for metadata (default fr-FR).
-        recursive: If True and path is dir, scan recursively (not fully implemented in logic below but reserved).
+        recursive: If True and path is dir, scan recursively.
+        sorted_dir: Optional path to scan for existing bonus numbering.
+        jellyfin_config: Optional dict with (url, api_key) for Jellyfin probing.
 
     Returns:
         Dict containing processing results, candidates, and recommended actions.
@@ -51,14 +84,99 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
     
     assigned_episodes = {} # (show, season, episode) -> filename
 
-    print(f"Analyzing {len(files)} files in {root_context}...")
-
-    # Shared cache for show/season lookups could implemented here or inside Matcher if we wanted 
-    # persistence across files, but currently Matcher is instantiated per file.
+    # Pre-analysis: Gather durations to identify "Main" vs "Bonus" prefixes
+    file_info = []
+    from mediatamer.signals.technical import get_technical_metadata
+    
+    prefixes = {} # prefix -> list of durations
     
     for f in files:
+        tech = get_technical_metadata(f)
+        duration = tech.get('duration', 0)
+        prefix = f.name[0].upper() if f.name else '?'
+        if prefix not in prefixes:
+            prefixes[prefix] = []
+        prefixes[prefix].append(duration)
+        file_info.append({'path': f, 'duration': duration, 'prefix': prefix})
+        
+    # Determine the "Main Episode" prefixes
+    # Heuristic: Pick the prefix with the longest median duration, 
+    # then include any other prefix whose median is within 80% of that max.
+    main_prefixes = set()
+    medians = {}
+    for p, durs in prefixes.items():
+        if not durs: continue
+        sorted_durs = sorted(durs)
+        median = sorted_durs[len(sorted_durs)//2]
+        medians[p] = median
+        
+    if medians:
+        max_median = max(medians.values())
+        if max_median > 600: # At least 10 minutes for a main episode
+            for p, m in medians.items():
+                if m >= (max_median * 0.8):
+                    main_prefixes.add(p)
+            
+    if main_prefixes:
+        print(f"Pre-analysis: Identified {sorted(list(main_prefixes))} as likely main episode prefixes (max median: {max_median/60:.1f}m)")
+
+    last_ep = None
+    next_bonus_num = None
+    
+    for info in file_info:
+        f = info['path']
+        is_likely_episode = (info['prefix'] in main_prefixes)
+        
         matcher = EpisodeMatcher(f, api_key)
+        matcher.is_likely_episode = is_likely_episode # Pass hint
+        matcher.last_episode_matched = last_ep # Pass hint
         matcher.find_metadata()
+        
+        if is_likely_episode and matcher.episode_number:
+            last_ep = matcher.episode_number
+            
+        # -- New Bonus Labeling Logic --
+        if not is_likely_episode and matcher.show_name:
+            # Apply suffix as requested: "Show - bonus"
+            original_show = matcher.show_name
+            # If it already contains " - Extras" or similar from heuristic, replace it
+            clean_show = original_show.split(" - ")[0]
+            matcher.show_name = f"{clean_show} - bonus"
+            
+            # Use current season as requested
+            # matcher.season_number is already set to current season by _infer_context
+            
+            # Sequential Numbering
+            if next_bonus_num is None:
+                # Initialize next_bonus_num by scanning local/ext sources
+                local_max = get_next_bonus_number(clean_show, matcher.season_number, sorted_dir)
+                
+                jelly_max = 0
+                if jellyfin_config:
+                    client = JellyfinClient(jellyfin_config['url'], jellyfin_config['api_key'])
+                    jelly_max = client.get_max_bonus_number(clean_show, matcher.season_number)
+                
+                next_bonus_num = max(local_max, jelly_max + 1 if jelly_max > 0 else 1)
+            
+            matcher.episode_number = next_bonus_num
+            next_bonus_num += 1
+            
+            # Title override as requested
+            # For bonuses, we might want to keep the original if matched, but user said:
+            # "episode: No title?" 
+            # I'll set a generic title or "No title" if desired.
+            bonus_ep = {
+                    'episode_number': matcher.episode_number,
+                    'name': 'No title',
+                    'id': None
+                }
+            matcher.best_candidate = {
+                'episode': bonus_ep,
+                'score': 100.0,
+                'reasons': ['Sequential bonus assignment']
+            }
+            # Also override candidates so the rest of the logic uses the clean data
+            matcher.candidates = [matcher.best_candidate]
         
         entry = {
             'file': f.name,
@@ -141,12 +259,78 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
 
     return results
 
+class JellyfinClient:
+    """Helper to probe a Jellyfin instance for existing media."""
+    def __init__(self, url: str, api_key: str):
+        self.url = url.rstrip('/')
+        self.api_key = api_key
+        
+    def get_max_bonus_number(self, show: str, season: int) -> int:
+        """Probe Jellyfin for the highest episode number in the '- bonus' series."""
+        try:
+            bonus_show_name = f"{show} - bonus"
+            
+            # 1. Search for Series ID
+            search_url = f"{self.url}/Items"
+            headers = {
+                'X-Emby-Token': self.api_key,
+                'Content-Type': 'application/json'
+            }
+            params = {
+                'SearchTerm': bonus_show_name,
+                'IncludeItemTypes': 'Series',
+                'Recursive': 'true',
+                'Fields': 'Id,Name'
+            }
+            resp = requests.get(search_url, headers=headers, params=params, timeout=10)
+            if not resp.ok:
+                print(f"  [JELLYFIN] API Error: {resp.status_code}")
+                return 0
+                
+            items = resp.json().get('Items', [])
+            series_id = None
+            for item in items:
+                if item.get('Name') == bonus_show_name:
+                    series_id = item.get('Id')
+                    break
+            
+            if not series_id:
+                return 0
+                
+            # 2. Get Episodes for Season
+            episodes_url = f"{self.url}/Shows/{series_id}/Episodes"
+            params = {
+                'SeasonNumber': season,
+                'Fields': 'IndexNumber'
+            }
+            resp = requests.get(episodes_url, headers=headers, params=params, timeout=10)
+            if not resp.ok:
+                return 0
+                
+            episodes = resp.json().get('Items', [])
+            max_num = 0
+            for ep in episodes:
+                num = ep.get('IndexNumber')
+                if num is not None:
+                    max_num = max(max_num, int(num))
+            
+            if max_num > 0:
+                print(f"  [JELLYFIN] Found max episode E{max_num} for '{bonus_show_name}' S{season}")
+            return max_num
+            
+        except Exception as e:
+            print(f"  [JELLYFIN] Error: {e}")
+            return 0
+
+
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--input-path", '-i', required=True, type=Path, help="Input file or directory")
     parser.add_argument("--tmdb-api-key", type=str, required=True, help="TMDB API Key")
     parser.add_argument("--language", type=str, default='fr-FR', help="Language for metadata")
-    parser.add_argument("--dry-run", action="store_true", help="Do not write metadata files, only review plan (Defacto default if review needed)")
-    # parser.add_argument("--output", ...) # Could add output dir
+    parser.add_argument("--dry-run", action="store_true", help="Do not write metadata files, only review plan")
+    parser.add_argument("--sorted-dir", type=Path, help="Path to organized library to detect next bonus number")
+    parser.add_argument("--jellyfin-url", type=str, help="Jellyfin Server URL")
+    parser.add_argument("--jellyfin-api-key", type=str, help="Jellyfin API Key")
     return parser
 
 def main():
@@ -155,9 +339,22 @@ def main():
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
+    jellyfin_config = None
+    if args.jellyfin_url and args.jellyfin_api_key:
+        jellyfin_config = {
+            'url': args.jellyfin_url,
+            'api_key': args.jellyfin_api_key
+        }
+
     # Call API
     try:
-        data = get_tv_shows_metadata(args.input_path, args.tmdb_api_key, args.language)
+        data = get_tv_shows_metadata(
+            args.input_path, 
+            args.tmdb_api_key, 
+            args.language,
+            sorted_dir=args.sorted_dir,
+            jellyfin_config=jellyfin_config
+        )
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)

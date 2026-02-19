@@ -37,7 +37,7 @@ def _check_subtitle_cache(path: Path) -> Optional[dict]:
         return None
 
 
-def extract_subtitle_text(path: Path, prefer_non_pgs: bool = True, duration_limit: float = 200.0) -> Optional[str]:
+def extract_subtitle_text(path: Path, prefer_non_pgs: bool = True, duration_limit: float = 20000000000000000.0) -> Optional[str]:
     """Extract the first available text subtitle stream from a video as a string.
 
     - Uses ffprobe (via `ffprobe_json`) to discover subtitle streams.
