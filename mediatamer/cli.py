@@ -14,8 +14,8 @@ import argparse
 from mediatamer.organize import get_argument_parser as get_organize_parser
 from mediatamer.compress import get_agument_parser as get_compress_parser
 from mediatamer.metadata import get_agument_parser as get_metadata_parser
-from mediatamer.get_tv_shows_metadata import main as get_tv_metadata_main
 from mediatamer.get_tv_shows_metadata import get_argument_parser as get_tv_metadata_parser
+from mediatamer.config import load_config
 
 
 def _call_module_main(module_name: str, argv: list[str]) -> int | None:
@@ -30,7 +30,7 @@ def _call_module_main(module_name: str, argv: list[str]) -> int | None:
         sys.argv = old_argv
 
 
-def create_parser():
+def create_parser(config: dict[str, Any] | None = None):
     parser = argparse.ArgumentParser(
         description="MediaTamer — organize and compress media for Jellyfin",
         prog="mediatamer"
@@ -42,6 +42,8 @@ def create_parser():
     organize_parser = subparsers.add_parser(
         "organize", help="Organize video files into Jellyfin layout")
     organize_parser = get_organize_parser(organize_parser)
+    if config:
+        organize_parser.set_defaults(tmdb_api_key=config.get('tmbd-api-key'))
 
     # Compress command
     compress_parser = subparsers.add_parser(
@@ -57,12 +59,19 @@ def create_parser():
     tv_parser = subparsers.add_parser(
         "tv-metadata", help="Extract TV Show metadata")
     tv_parser = get_tv_metadata_parser(tv_parser)
+    if config:
+        tv_parser.set_defaults(
+            tmdb_api_key=config.get('tmbd-api-key'),
+            jellyfin_url=config.get('jellyfin-url'),
+            jellyfin_api_key=config.get('jellyfin-api-key')
+        )
 
     return parser
 
 
 def main() -> int | None:
-    parser = create_parser()
+    config = load_config()
+    parser = create_parser(config)
     args = parser.parse_args()
 
     if not args.command:

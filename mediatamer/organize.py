@@ -2,27 +2,11 @@
 from pathlib import Path
 import argparse
 from shutil import move, copy2
-from collections import defaultdict
 import argcomplete
 
-from .metadata import (
-    check_ffprobe, extract_metadata
-)
+from .metadata import check_ffprobe
 from .parameters import get_extensions
-
-
-def sanitize_filename(name: str) -> str:
-    """Sanitize string for use in filenames."""
-    import re
-    # Replace invalid chars with space or dash
-    name = re.sub(r'[<>:"/\\|?*]', '-', name)
-    # Collapse multiple spaces/dashes
-    name = re.sub(r'[- ]+', ' ', name).strip()
-    return name
-
-
-def zero_pad(n):
-    return f"{n:02d}"
+from .utils import sanitize_filename, zero_pad
 
 
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -38,7 +22,9 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
                         default=get_extensions(),
                         help="Video extensions to include (example: .mp4 .mkv)")
     parser.add_argument("--tmdb-api-key", type=str,
-                        help="TMDB API key for episode title lookup")
+                        help="TMDB API key for episode title lookup (can be set in config)")
+    parser.add_argument("--language", type=str, default='fr-FR',
+                        help="Language for metadata lookup")
     return parser
 
 
@@ -49,106 +35,78 @@ def main():
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
+    # Load config for fallback
+    from mediatamer.config import load_config
+    config = load_config()
+    tmdb_key = args.tmdb_api_key or config.get('tmbd-api-key')
+
     check_ffprobe()
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
-    if args.exts:
-        exts = {e.lower() if e.startswith(
-            '.') else f".{e.lower()}" for e in args.exts}
-    else:
-        exts = {e if e.startswith('.') else f".{e}" for e in get_extensions()}
+    
+    # Use the robust metadata engine
+    from .get_tv_shows_metadata import get_tv_shows_metadata
+    
+    print(f"Scanning {input_root}...")
+    results = get_tv_shows_metadata(
+        input_root,
+        tmdb_key,
+        language=args.language,
+        recursive=True,
+        sorted_dir=output_root # Use output as reference for bonus numbering
+    )
 
-    files = [p for p in input_root.rglob(
-        "*") if p.suffix.lower() in exts and p.is_file()]
-    if not files:
-        print("No video files found under", input_root)
-        return
-
-    file_infos = []
     planned_dests = set()
-
-    for p in sorted(files):
-        # Use extract_metadata from metadata.py for all metadata extraction
-        meta = extract_metadata(p, input_root, args.tmdb_api_key)
-
-        title = sanitize_filename(meta.get('episode_title', '')) if meta.get(
-            'episode_title') else ''
-
-        file_infos.append({
-            'path': p,
-            'show': meta.get('show_name'),
-            'season': meta.get('season'),
-            'ep_start': meta.get('episode_start'),
-            'ep_end': meta.get('episode_end'),
-            'title': title
-        })
-
-    # Group files by show and season for sequential numbering
-    groups = defaultdict(list)
-    for fi in file_infos:
-        key = (fi['show'], fi['season'] if fi['season'] is not None else 0)
-        groups[key].append(fi['path'])
-
-    sequential_counters = {}
-    for (show, season), plist in groups.items():
-        existing = []
-        for p in plist:
-            for fi in file_infos:
-                if fi['path'] == p and fi.get('ep_start'):
-                    existing.append(fi.get('ep_start'))
-                    break
-        counter = 1
-        if existing:
-            counter = max(existing) + 1
-        sequential_counters[(show, season)] = counter
-
     actions = []
-    for fi in file_infos:
-        p = fi['path']
-        show = fi['show']
-        season = fi['season']
-        ep_start = fi.get('ep_start')
-        ep_end = fi.get('ep_end')
 
+    for entry in results.get('files', []):
+        src = Path(entry['path'])
+        show = entry.get('show_detected') or "Unknown Show"
+        season = entry.get('season_detected')
+        episode = entry.get('episode_detected')
+        
         if season is None:
-            season = 1
+            season = 1 # Fallback
+            
+        if not episode:
+            # Skip files with no detected episode number
+            actions.append((src, None, None, "SKIP (No Episode)"))
+            continue
 
-        if ep_start is None:
-            ep = sequential_counters[(show, season)]
-            sequential_counters[(show, season)] += 1
-            ep_start = ep
-            ep_end = None
+        selected = entry.get('selected_episode')
+        title = ""
+        if selected and selected.get('name'):
+            title = sanitize_filename(selected['name'])
 
         season_str = zero_pad(season)
-        episode_str = zero_pad(ep_start)
-        episode_end_str = zero_pad(ep_end) if ep_end else None
-        show_dir_name = show
+        episode_str = zero_pad(episode)
+        
+        show_dir_name = sanitize_filename(show)
         dest_dir = output_root / show_dir_name / f"Season {season_str}"
-        if episode_end_str and ep_end and ep_end != ep_start:
-            dest_name = f"{show_dir_name} - S{season_str}E{episode_str}-E{episode_end_str}{p.suffix.lower()}"
-        else:
-            title_part = f" - {fi['title']}" if fi.get('title') else ""
-            dest_name = f"{show_dir_name} - S{season_str}E{episode_str}{title_part}{p.suffix.lower()}"
+        
+        title_part = f" - {title}" if title else ""
+        dest_name = f"{show_dir_name} - S{season_str}E{episode_str}{title_part}{src.suffix.lower()}"
         dest_path = dest_dir / dest_name
 
+        # Handle collisions
         counter = 1
         candidate = dest_path
         while candidate.exists() or candidate in planned_dests:
             candidate = dest_dir / \
-                f"{show_dir_name} - S{season_str}E{episode_str} ({counter}){p.suffix.lower()}"
+                f"{show_dir_name} - S{season_str}E{episode_str} ({counter}){src.suffix.lower()}"
             counter += 1
+        
         planned_dests.add(candidate)
-        actions.append((p, candidate, args.move if args.apply else None,
+        actions.append((src, candidate, args.move if args.apply else None,
                        "MOVE" if args.apply and args.move else ("COPY" if args.apply else "DRY")))
 
-    print("Planned actions:")
+    print("\nPlanned actions:")
     for src, dest, move_flag, action in actions:
         if dest is None:
-            print(
-                f"  SKIP: {src} -> no episode detected")
+            print(f"  {action}: {src.name}")
         else:
-            print(f"  {action}: {src} -> {dest}")
+            print(f"  {action}: {src.name} -> {dest.relative_to(output_root)}")
 
     if not args.apply:
         print("\nDry-run mode. To apply changes, re-run with --apply and optionally --move to move files.")
@@ -158,11 +116,15 @@ def main():
         if dest is None:
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if move_flag:
-            move(str(src), str(dest))
-        else:
-            copy2(str(src), str(dest))
-    print("Done. Files organized under:", output_root)
+        try:
+            if move_flag:
+                move(str(src), str(dest))
+            else:
+                copy2(str(src), str(dest))
+        except Exception as e:
+            print(f"Error processing {src}: {e}")
+
+    print("\nDone. Files organized under:", output_root)
 
 
 if __name__ == '__main__':

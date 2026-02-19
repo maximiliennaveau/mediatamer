@@ -27,6 +27,8 @@
         ];
         propagatedBuildInputs = [
           pkgs.ffmpeg
+          pkgs.mkvtoolnix
+          pkgs.mediainfo
           pkgs.handbrake
           pkgs.tesseract
           pkgs.python3Packages.argcomplete
@@ -34,6 +36,7 @@
           pkgs.python3Packages.pytesseract
           pkgs.python3Packages.pillow
           pkgs.python3Packages.langdetect
+          pkgs.python3Packages.pyyaml
         ];
         pyproject = true;
         meta = with pkgs.lib; {

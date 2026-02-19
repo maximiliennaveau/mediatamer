@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Tuple, Optional
 import requests
 
 from .parameters import get_extensions
+from .utils import normalize_show_name
 
 
 SE_EP_PATTERNS = [
@@ -30,20 +31,6 @@ SE_EP_PATTERNS = [
 
 SEASON_ONLY_PAT = re.compile(
     r'[Ss](?P<season>\d{1,2})|Season[ ._-]?(?P<season2>\d{1,2})', re.I)
-
-
-def normalize_show_name(raw: str) -> str:
-    """Normalize show names by cleaning up common patterns."""
-    s = raw.replace('_', ' ').replace('.', ' ').strip()
-    s = re.sub(r'\b[Ss]\d{1,2}\b', '', s)
-    s = re.sub(r'\bDVD[_ -]?\d+\b', '', s, flags=re.I)
-    s = re.sub(r'\bD[_ -]?\d+\b', '', s, flags=re.I)
-    s = re.sub(r'\bDisc[_ -]?\d+\b', '', s, flags=re.I)
-    s = re.sub(r'\s+', ' ', s).strip()
-    # Handle common abbreviations
-    if s.lower() == 'dr who':
-        s = 'Doctor Who'
-    return s.title() if s else 'Unknown Show'
 
 
 def extract_se_ep_from_name(name: str) -> Tuple[Optional[int], Optional[int], Optional[int]]:
@@ -460,7 +447,7 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
                         default=get_extensions(),
                         help="Extensions to scan (default .mkv)")
     parser.add_argument("--tmdb-api-key", type=str,
-                        help="TMDB API key for episode title lookup")
+                        help="TMDB API key for episode title lookup (can be set in config)")
     parser.add_argument("--language", type=str, default='en-US',
                         help="Language for TMDB lookup (e.g., fr-FR, en-US)")
     return parser
@@ -471,6 +458,11 @@ def main():
         description="Extract metadata from videos.")
     parser = get_agument_parser(parser)
     args = parser.parse_args()
+
+    # Load config for fallback
+    from mediatamer.config import load_config
+    config = load_config()
+    tmdb_key = args.tmdb_api_key or config.get('tmbd-api-key')
 
     check_ffprobe()
     input_dir = args.input.resolve()
@@ -487,7 +479,7 @@ def main():
     for f in files:
         try:
             meta = extract_metadata(
-                f, input_dir, args.tmdb_api_key, args.language)
+                f, input_dir, tmdb_key, args.language)
         except Exception as e:
             print(f"Error extracting metadata for {f}: {e}")
             continue

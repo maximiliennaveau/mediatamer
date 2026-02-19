@@ -12,6 +12,7 @@ import argcomplete
 from mediatamer.metadata import extract_metadata
 from mediatamer.parameters import get_extensions
 from mediatamer.matcher import EpisodeMatcher
+from mediatamer.signals.unified import MediaSignals
 
 
 def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) -> int:
@@ -44,7 +45,7 @@ def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) ->
     return max_num + 1
 
 
-def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', recursive: bool = False, sorted_dir: Optional[Path] = None, jellyfin_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', recursive: bool = True, sorted_dir: Optional[Path] = None, jellyfin_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Analyze a video file or directory and return metadata plan.
     
@@ -84,24 +85,38 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
     
     assigned_episodes = {} # (show, season, episode) -> filename
 
-    # Pre-analysis: Gather durations to identify "Main" vs "Bonus" prefixes
+    # Pre-analysis: Gather durations and identify show/season groups
     file_info = []
-    from mediatamer.signals.technical import get_technical_metadata
+    from mediatamer.metadata import find_parent_show_and_season
     
     prefixes = {} # prefix -> list of durations
+    groups = {}   # (show, season) -> list of file indices
     
-    for f in files:
-        tech = get_technical_metadata(f)
-        duration = tech.get('duration', 0)
+    for i, f in enumerate(files):
+        sig = MediaSignals.from_path(f)
+        duration = sig.duration
         prefix = f.name[0].upper() if f.name else '?'
         if prefix not in prefixes:
             prefixes[prefix] = []
         prefixes[prefix].append(duration)
-        file_info.append({'path': f, 'duration': duration, 'prefix': prefix})
+        
+        # Infer show/season for grouping
+        show, season = find_parent_show_and_season(f, root_context)
+        group_key = (show, season)
+        if group_key not in groups:
+            groups[group_key] = []
+        groups[group_key].append(i)
+        
+        file_info.append({
+            'path': f, 
+            'duration': duration, 
+            'prefix': prefix,
+            'show': show,
+            'season': season,
+            'signals': sig
+        })
         
     # Determine the "Main Episode" prefixes
-    # Heuristic: Pick the prefix with the longest median duration, 
-    # then include any other prefix whose median is within 80% of that max.
     main_prefixes = set()
     medians = {}
     for p, durs in prefixes.items():
@@ -120,63 +135,79 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
     if main_prefixes:
         print(f"Pre-analysis: Identified {sorted(list(main_prefixes))} as likely main episode prefixes (max median: {max_median/60:.1f}m)")
 
-    last_ep = None
-    next_bonus_num = None
-    
-    for info in file_info:
-        f = info['path']
-        is_likely_episode = (info['prefix'] in main_prefixes)
+    # 3. Process each group
+    for group_key, indices in groups.items():
+        show_name, season_number = group_key
+        print(f"\nProcessing Group: {show_name} Season {season_number} ({len(indices)} files)")
         
-        matcher = EpisodeMatcher(f, api_key)
-        matcher.is_likely_episode = is_likely_episode # Pass hint
-        matcher.last_episode_matched = last_ep # Pass hint
-        matcher.find_metadata()
+        last_ep = None
+        next_bonus_num = None
         
-        if is_likely_episode and matcher.episode_number:
-            last_ep = matcher.episode_number
+        # Sort indices by filename within group to maintain sequence
+        indices.sort(key=lambda idx: file_info[idx]['path'].name)
+        
+        # Identify if this group looks like a DVD set with global indices
+        from mediatamer.signals.scoring import parse_disc_track
+        group_files_info = [file_info[idx] for idx in indices]
+        has_global_indices = all(parse_disc_track(info['path'].name) is not None for info in group_files_info if info['prefix'] in main_prefixes)
+        
+        for idx in indices:
+            info = file_info[idx]
+            f = info['path']
+            is_likely_episode = (info['prefix'] in main_prefixes)
             
-        # -- New Bonus Labeling Logic --
-        if not is_likely_episode and matcher.show_name:
-            # Apply suffix as requested: "Show - bonus"
-            original_show = matcher.show_name
-            # If it already contains " - Extras" or similar from heuristic, replace it
-            clean_show = original_show.split(" - ")[0]
-            matcher.show_name = f"{clean_show} - bonus"
+            # Pass show and season from group for consistency
+            matcher = EpisodeMatcher(f, api_key, show_name=show_name, season_number=season_number)
+            matcher.is_likely_episode = is_likely_episode 
+            matcher.last_episode_matched = last_ep 
+            matcher.has_global_indices = has_global_indices
+            matcher.find_metadata()
+            
+            if is_likely_episode and matcher.episode_number:
+                last_ep = matcher.episode_number
+                
+            # -- New Bonus Labeling Logic --
+            if not is_likely_episode and matcher.show_name:
+                # Apply suffix as requested: "Show - bonus"
+                original_show = matcher.show_name
+                # If it already contains " - Extras" or similar from heuristic, replace it
+                clean_show = original_show.split(" - ")[0]
+                matcher.show_name = f"{clean_show} - bonus"
             
             # Use current season as requested
             # matcher.season_number is already set to current season by _infer_context
             
-            # Sequential Numbering
-            if next_bonus_num is None:
-                # Initialize next_bonus_num by scanning local/ext sources
-                local_max = get_next_bonus_number(clean_show, matcher.season_number, sorted_dir)
+                # Sequential Numbering
+                if next_bonus_num is None:
+                    # Initialize next_bonus_num by scanning local/ext sources
+                    local_max = get_next_bonus_number(clean_show, matcher.season_number, sorted_dir)
+                    
+                    jelly_max = 0
+                    if jellyfin_config:
+                        client = JellyfinClient(jellyfin_config['url'], jellyfin_config['api_key'])
+                        jelly_max = client.get_max_bonus_number(clean_show, matcher.season_number)
+                    
+                    next_bonus_num = max(local_max, jelly_max + 1 if jelly_max > 0 else 1)
                 
-                jelly_max = 0
-                if jellyfin_config:
-                    client = JellyfinClient(jellyfin_config['url'], jellyfin_config['api_key'])
-                    jelly_max = client.get_max_bonus_number(clean_show, matcher.season_number)
+                matcher.episode_number = next_bonus_num
+                next_bonus_num += 1
                 
-                next_bonus_num = max(local_max, jelly_max + 1 if jelly_max > 0 else 1)
-            
-            matcher.episode_number = next_bonus_num
-            next_bonus_num += 1
-            
-            # Title override as requested
-            # For bonuses, we might want to keep the original if matched, but user said:
-            # "episode: No title?" 
-            # I'll set a generic title or "No title" if desired.
-            bonus_ep = {
-                    'episode_number': matcher.episode_number,
-                    'name': 'No title',
-                    'id': None
+                # Title override as requested
+                # For bonuses, we might want to keep the original if matched, but user said:
+                # "episode: No title?" 
+                # I'll set a generic title or "No title" if desired.
+                bonus_ep = {
+                        'episode_number': matcher.episode_number,
+                        'name': 'No title',
+                        'id': None
+                    }
+                matcher.best_candidate = {
+                    'episode': bonus_ep,
+                    'score': 100.0,
+                    'reasons': ['Sequential bonus assignment']
                 }
-            matcher.best_candidate = {
-                'episode': bonus_ep,
-                'score': 100.0,
-                'reasons': ['Sequential bonus assignment']
-            }
-            # Also override candidates so the rest of the logic uses the clean data
-            matcher.candidates = [matcher.best_candidate]
+                # Also override candidates so the rest of the logic uses the clean data
+                matcher.candidates = [matcher.best_candidate]
         
         entry = {
             'file': f.name,
@@ -325,12 +356,12 @@ class JellyfinClient:
 
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--input-path", '-i', required=True, type=Path, help="Input file or directory")
-    parser.add_argument("--tmdb-api-key", type=str, required=True, help="TMDB API Key")
+    parser.add_argument("--tmdb-api-key", type=str, help="TMDB API Key (can be set in mediatamer-config.yml)")
     parser.add_argument("--language", type=str, default='fr-FR', help="Language for metadata")
     parser.add_argument("--dry-run", action="store_true", help="Do not write metadata files, only review plan")
     parser.add_argument("--sorted-dir", type=Path, help="Path to organized library to detect next bonus number")
-    parser.add_argument("--jellyfin-url", type=str, help="Jellyfin Server URL")
-    parser.add_argument("--jellyfin-api-key", type=str, help="Jellyfin API Key")
+    parser.add_argument("--jellyfin-url", type=str, help="Jellyfin Server URL (can be set in config)")
+    parser.add_argument("--jellyfin-api-key", type=str, help="Jellyfin API Key (can be set in config)")
     return parser
 
 def main():
@@ -339,18 +370,31 @@ def main():
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
+    # If running standalone, we might need to load config here too
+    # but cli.py already does it if called via 'mediatamer'
+    from mediatamer.config import load_config
+    config = load_config()
+    
+    tmdb_key = args.tmdb_api_key or config.get('tmbd-api-key')
+    if not tmdb_key:
+        print("Error: TMDB API Key is required. Provide it via --tmdb-api-key or in mediatamer-config.yml")
+        sys.exit(1)
+
+    jellyfin_url = args.jellyfin_url or config.get('jellyfin-url')
+    jellyfin_api_key = args.jellyfin_api_key or config.get('jellyfin-api-key')
+
     jellyfin_config = None
-    if args.jellyfin_url and args.jellyfin_api_key:
+    if jellyfin_url and jellyfin_api_key:
         jellyfin_config = {
-            'url': args.jellyfin_url,
-            'api_key': args.jellyfin_api_key
+            'url': jellyfin_url,
+            'api_key': jellyfin_api_key
         }
 
     # Call API
     try:
         data = get_tv_shows_metadata(
-            args.input_path, 
-            args.tmdb_api_key, 
+            args.input_path,
+            tmdb_key,
             args.language,
             sorted_dir=args.sorted_dir,
             jellyfin_config=jellyfin_config
