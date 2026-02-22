@@ -4,7 +4,7 @@ Each module implements one focused extractor returning a plain dict.
 """
 
 from .guessit import extract_from_guessit
-from .unified import get_technical_metadata
+from .technical import get_technical_metadata
 from .subtitle_hash import compute_file_hash, lookup_subtitle_hash
 
 __all__ = [

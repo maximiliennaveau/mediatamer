@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import argcomplete
 
+from mediatamer.matcher import EpisodeMatcher
 from mediatamer.metadata import extract_metadata, find_parent_show_and_season
 from mediatamer.parameters import get_extensions
-from mediatamer.matcher import EpisodeMatcher
-from mediatamer.signals.unified import TechnicalSignals
 from mediatamer.signals.context import infer_context_from_path
+from mediatamer.signals.technical import TechnicalSignals
 
 
 def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) -> int:
@@ -88,9 +88,9 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', sor
     }
     
     assigned_episodes = {} # (show, date, season, episode) -> filename
-
+    
     # Pre-analysis: Gather durations and identify show/season groups
-    file_info = []
+    files_info = []
     prefixes = {} # prefix -> list of durations
     groups = {}   # (show, season) -> list of file indices
     
@@ -109,7 +109,7 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', sor
             groups[group_key] = []
         groups[group_key].append(i)
         
-        file_info.append({
+        files_info.append({
             'path': f, 
             'duration': duration, 
             'prefix': prefix,
@@ -147,15 +147,15 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', sor
         next_bonus_num = None
         
         # Sort indices by (dvd, filename) to maintain global season sequence
-        indices.sort(key=lambda idx: (file_info[idx]['dvd'], file_info[idx]['path'].name))
+        indices.sort(key=lambda idx: (files_info[idx]['dvd'], files_info[idx]['path'].name))
         
         # Identify if this group looks like a DVD set with global indices
         from mediatamer.signals.scoring import parse_disc_track
-        group_files_info = [file_info[idx] for idx in indices]
+        group_files_info = [files_info[idx] for idx in indices]
         has_global_indices = all(parse_disc_track(info['path'].name) is not None for info in group_files_info if info['prefix'] in main_prefixes)
         
         for idx in indices:
-            info = file_info[idx]
+            info = files_info[idx]
             f = info['path']
             is_likely_episode = (info['prefix'] in main_prefixes)
             

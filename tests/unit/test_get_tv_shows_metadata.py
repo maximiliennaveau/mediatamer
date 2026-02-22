@@ -41,7 +41,7 @@ class TestGetTvShowsMetadata(unittest.TestCase):
         }
     }
 
-    @patch("mediatamer.signals.unified.TechnicalSignals.from_path")
+    @patch("mediatamer.signals.technical.TechnicalSignals.from_path")
     @patch("mediatamer.matcher.requests.get")
     @patch("mediatamer.signals.context.infer_context_from_path")
     def test_parsing_doctor_who_season_9_dvd3(self, mock_infer, mock_get, mock_technical_signals):

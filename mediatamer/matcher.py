@@ -9,7 +9,7 @@ from mediatamer.signals.guessit import extract_from_guessit
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, lang_to_tmdb_locale
 from mediatamer.signals.context import infer_context_from_path
 from mediatamer.signals.scoring import score_episode_match, parse_disc_track
-from mediatamer.signals.unified import TechnicalSignals
+from mediatamer.signals.technical import TechnicalSignals
 
 
 class EpisodeMatcher:

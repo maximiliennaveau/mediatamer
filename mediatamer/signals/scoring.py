@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from mediatamer.signals.unified import TechnicalSignals
+from mediatamer.signals.technical import TechnicalSignals
 
 def parse_disc_track(filename: str) -> Optional[Dict[str, Any]]:
     """Parse DVD disc/track structure from filenames like B2_t04.mkv."""
