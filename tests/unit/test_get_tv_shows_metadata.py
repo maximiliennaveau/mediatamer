@@ -41,10 +41,10 @@ class TestGetTvShowsMetadata(unittest.TestCase):
         }
     }
 
-    @patch("mediatamer.signals.unified.MediaSignals.from_path")
+    @patch("mediatamer.signals.unified.TechnicalSignals.from_path")
     @patch("mediatamer.matcher.requests.get")
     @patch("mediatamer.signals.context.infer_context_from_path")
-    def test_parsing_doctor_who_season_9_dvd3(self, mock_infer, mock_get, mock_media_signals):
+    def test_parsing_doctor_who_season_9_dvd3(self, mock_infer, mock_get, mock_technical_signals):
         # 1. Mock MediaSignals for all files
         def mock_signals(path, **kwargs):
             m = MagicMock()
@@ -53,7 +53,7 @@ class TestGetTvShowsMetadata(unittest.TestCase):
             m.chapters = []
             m.embedded_title = None
             return m
-        mock_media_signals.side_effect = mock_signals
+        mock_technical_signals.side_effect = mock_signals
         
         # 2. Mock TMDB responses
         def mock_tmdb_responses(url, params=None, **kwargs):

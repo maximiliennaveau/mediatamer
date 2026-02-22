@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from mediatamer.signals.unified import MediaSignals
+from mediatamer.signals.unified import TechnicalSignals
 
 def parse_disc_track(filename: str) -> Optional[Dict[str, Any]]:
     """Parse DVD disc/track structure from filenames like B2_t04.mkv."""
@@ -17,7 +17,7 @@ def parse_disc_track(filename: str) -> Optional[Dict[str, Any]]:
 def score_episode_match(
     ep: Dict[str, Any],
     file_path: Path,
-    media_signals: MediaSignals,
+    technical_signals: TechnicalSignals,
     sub_text: Optional[str] = None,
     credits_text: Optional[str] = None,
     context_hints: Optional[Dict[str, Any]] = None
@@ -26,8 +26,8 @@ def score_episode_match(
     score = 0.0
     reasons = []
     
-    duration = media_signals.duration
-    embedded_title = media_signals.embedded_title
+    duration = technical_signals.duration
+    embedded_title = technical_signals.embedded_title
     disc_info = parse_disc_track(file_path.name)
     
     # 1. Duration Match
@@ -46,15 +46,16 @@ def score_episode_match(
             reasons.append(f"Duration mismatch ({diff/60:.1f}m diff)")
         elif diff > 600:
             score -= 50.0
+            reasons.append(f"Loose duration mismatch ({diff/60:.1f}m diff)")
 
     # 1b. Chapters Signal
-    has_chapters = media_signals.has_chapters
-    chapter_count = len(media_signals.chapters)
+    has_chapters = technical_signals.has_chapters
+    chapter_count = len(technical_signals.chapters)
     if has_chapters:
         if 4 <= chapter_count <= 8:
             score += 20.0
             reasons.append(f"Chapter count ({chapter_count}) consistent with single episode")
-        elif chapter_count > 12 and media_signals.is_multi_episode:
+        elif chapter_count > 12 and technical_signals.is_multi_episode:
             score += 40.0
             reasons.append(f"High chapter count ({chapter_count}) suggesting multi-episode file")
 

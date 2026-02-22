@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import argcomplete
 
-from mediatamer.metadata import extract_metadata
+from mediatamer.metadata import extract_metadata, find_parent_show_and_season
 from mediatamer.parameters import get_extensions
 from mediatamer.matcher import EpisodeMatcher
-from mediatamer.signals.unified import MediaSignals
+from mediatamer.signals.unified import TechnicalSignals
 from mediatamer.signals.context import infer_context_from_path
 
 
@@ -46,7 +46,7 @@ def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) ->
     return max_num + 1
 
 
-def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', recursive: bool = True, sorted_dir: Optional[Path] = None, jellyfin_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', sorted_dir: Optional[Path] = None, jellyfin_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Analyze a video file or directory and return metadata plan.
     
@@ -54,7 +54,6 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
         path: File or Directory to analyze.
         api_key: TMDB API Key.
         language: Language for metadata (default fr-FR).
-        recursive: If True and path is dir, scan recursively.
         sorted_dir: Optional path to scan for existing bonus numbering.
         jellyfin_config: Optional dict with (url, api_key) for Jellyfin probing.
 
@@ -71,11 +70,15 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
         root_context = path.parent
     else:
         exts = {e if e.startswith('.') else f".{e}" for e in get_extensions()}
-        if recursive:
-            files = sorted([p for p in path.rglob("*") if p.suffix.lower() in exts and p.is_file()])
-        else:
-            files = sorted([p for p in path.glob("*") if p.suffix.lower() in exts and p.is_file()])
+        files = sorted([p for p in path.rglob("*") if p.suffix.lower() in exts and p.is_file()])
         root_context = path
+
+    if len(files) == 0:
+        raise FileNotFoundError(f"No video files found in {path}")
+    assert type(files) is list
+    print(f"Processing {len(files)} files:")
+    for f in files:
+        print(f"\t{f}")
 
     results = {
         'source': str(path),
@@ -84,17 +87,15 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
         'summary': {'analyzed': len(files), 'matched': 0, 'conflicts': 0}
     }
     
-    assigned_episodes = {} # (show, season, episode) -> filename
+    assigned_episodes = {} # (show, date, season, episode) -> filename
 
     # Pre-analysis: Gather durations and identify show/season groups
     file_info = []
-    from mediatamer.metadata import find_parent_show_and_season
-    
     prefixes = {} # prefix -> list of durations
     groups = {}   # (show, season) -> list of file indices
     
     for i, f in enumerate(files):
-        sig = MediaSignals.from_path(f)
+        sig = TechnicalSignals.from_path(f)
         duration = sig.duration
         prefix = f.name[0].upper() if f.name else '?'
         if prefix not in prefixes:

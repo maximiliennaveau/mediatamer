@@ -7,23 +7,32 @@ from mediatamer.signals.mkvmerge import extract_metadata_mkvmerge
 from mediatamer.signals.mediainfo import extract_metadata_mediainfo
 
 @dataclass
-class MediaSignals:
+class TechnicalSignals:
     path: Path
     ffprobe: Dict[str, Any] = field(default_factory=dict)
     mkvmerge: Dict[str, Any] = field(default_factory=dict)
     mediainfo: Dict[str, Any] = field(default_factory=dict)
     
     @classmethod
-    def from_path(cls, path: Path, tools: List[str] = ['ffprobe', 'mkvmerge']):
+    def from_path(cls, path: Path):
         """Factory to create signals."""
         signals = cls(path=path)
-        if 'ffprobe' in tools:
-            signals.ffprobe = extract_metadata_ffprobe(path)
-        if 'mkvmerge' in tools:
-            signals.mkvmerge = extract_metadata_mkvmerge(path)
-        if 'mediainfo' in tools:
-            signals.mediainfo = extract_metadata_mediainfo(path)
+        signals.ffprobe = extract_metadata_ffprobe(path)
+        signals.mkvmerge = extract_metadata_mkvmerge(path)
+        signals.mediainfo = extract_metadata_mediainfo(path)
         return signals
+
+    def to_legacy_dict(self) -> Dict[str, Any]:
+        """Convert to the dictionary format expected by legacy code."""
+        return {
+            'duration': self.duration,
+            'chapters': self.chapters,
+            'has_chapters': self.has_chapters,
+            'embedded_title': self.embedded_title,
+            'ffprobe': self.ffprobe,
+            'mkvmerge': self.mkvmerge,
+            'mediainfo': self.mediainfo,
+        }
 
     @property
     def duration(self) -> float:
@@ -103,3 +112,9 @@ class MediaSignals:
             if track.get('@type') == 'General':
                 return track.get('Encoded_Date')
         return None
+
+
+def get_technical_metadata(path: Path) -> Dict[str, Any]:
+    """Return technical metadata extracted with multiple tools (unified)."""
+    signals = TechnicalSignals.from_path(path)
+    return signals.to_legacy_dict()
