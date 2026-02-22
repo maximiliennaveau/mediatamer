@@ -13,6 +13,7 @@ from mediatamer.metadata import extract_metadata
 from mediatamer.parameters import get_extensions
 from mediatamer.matcher import EpisodeMatcher
 from mediatamer.signals.unified import MediaSignals
+from mediatamer.signals.context import infer_context_from_path
 
 
 def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) -> int:
@@ -100,8 +101,8 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
             prefixes[prefix] = []
         prefixes[prefix].append(duration)
         
-        # Infer show/season for grouping
-        show, season = find_parent_show_and_season(f, root_context)
+        # Infer context (show, season, dvd) for grouping and sorting
+        show, season, dvd = infer_context_from_path(f, root_context)
         group_key = (show, season)
         if group_key not in groups:
             groups[group_key] = []
@@ -113,6 +114,7 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
             'prefix': prefix,
             'show': show,
             'season': season,
+            'dvd': dvd or 0,
             'signals': sig
         })
         
@@ -143,8 +145,8 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
         last_ep = None
         next_bonus_num = None
         
-        # Sort indices by filename within group to maintain sequence
-        indices.sort(key=lambda idx: file_info[idx]['path'].name)
+        # Sort indices by (dvd, filename) to maintain global season sequence
+        indices.sort(key=lambda idx: (file_info[idx]['dvd'], file_info[idx]['path'].name))
         
         # Identify if this group looks like a DVD set with global indices
         from mediatamer.signals.scoring import parse_disc_track
@@ -157,7 +159,7 @@ def get_tv_shows_metadata(path: Path, api_key: str, language: str = 'fr-FR', rec
             is_likely_episode = (info['prefix'] in main_prefixes)
             
             # Pass show and season from group for consistency
-            matcher = EpisodeMatcher(f, api_key, show_name=show_name, season_number=season_number)
+            matcher = EpisodeMatcher(f, api_key, show_name=show_name, season_number=season_number, scan_root=root_context)
             matcher.is_likely_episode = is_likely_episode 
             matcher.last_episode_matched = last_ep 
             matcher.has_global_indices = has_global_indices

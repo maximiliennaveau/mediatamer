@@ -37,6 +37,7 @@
           pkgs.python3Packages.pillow
           pkgs.python3Packages.langdetect
           pkgs.python3Packages.pyyaml
+          pkgs.python3Packages.guessit
         ];
         pyproject = true;
         meta = with pkgs.lib; {

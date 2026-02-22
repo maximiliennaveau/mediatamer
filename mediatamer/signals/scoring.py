@@ -51,7 +51,6 @@ def score_episode_match(
     has_chapters = media_signals.has_chapters
     chapter_count = len(media_signals.chapters)
     if has_chapters:
-        # Heuristic: 4-8 chapters is typical for a single 20-50 min episode
         if 4 <= chapter_count <= 8:
             score += 20.0
             reasons.append(f"Chapter count ({chapter_count}) consistent with single episode")
@@ -65,6 +64,7 @@ def score_episode_match(
         last_episode_matched = context_hints.get('last_episode_matched')
         has_global_indices = context_hints.get('has_global_indices')
         target_season = context_hints.get('season_number')
+        dvd_number = context_hints.get('dvd_number')
 
         if is_likely_episode is True:
             if int(ep.get('season_number', -1)) == 0:
@@ -81,26 +81,43 @@ def score_episode_match(
                 score -= 50.0
                 reasons.append(f"Penalizing Season {target_season} for likely bonus file")
 
+        ep_num = ep.get('episode_number', -1)
+        
+        # Relative Sequence Matching (Very Strong)
         if last_episode_matched is not None:
-            ep_num = ep.get('episode_number', -1)
-            if ep_num > last_episode_matched:
-                score += 40.0
-                reasons.append(f"Rewarding episode sequence (E{ep_num} > last E{last_episode_matched})")
+            if ep_num == last_episode_matched + 1:
+                score += 60.0
+                reasons.append(f"Perfect relative sequence (last E{last_episode_matched} -> E{ep_num})")
+            elif ep_num > last_episode_matched:
+                score += 30.0
+                reasons.append(f"Forward episode sequence (E{ep_num} > last E{last_episode_matched})")
             elif ep_num <= last_episode_matched:
-                score -= 40.0
+                score -= 60.0 # Strict penalty for out of order
                 reasons.append(f"Penalizing out-of-order sequence (E{ep_num} <= last E{last_episode_matched})")
 
+        # Global/Disc Track Index Matching
         if disc_info:
-            ep_num = ep.get('episode_number', -1)
             global_idx = disc_info.get('global_index')
             if global_idx is not None:
-                expected_ep = global_idx + 1
-                if ep_num == expected_ep:
+                expected_ep_abs = global_idx + 1
+                
+                if ep_num == expected_ep_abs:
                     score += 150.0 if has_global_indices else 40.0
                     reasons.append(f"Global index match (t{global_idx:02d} -> E{ep_num})")
                 elif has_global_indices:
-                    score -= 100.0
-                    reasons.append(f"Global index mismatch in verified group (expected E{expected_ep}, got E{ep_num})")
+                    # If we are on DVD 1, we expect absolute match
+                    if dvd_number is None or dvd_number <= 1:
+                        score -= 100.0
+                        reasons.append(f"Global index mismatch on DVD1 (expected E{expected_ep_abs}, got E{ep_num})")
+                    else:
+                        # On DVD > 1, tracks might reset or have weird offsets.
+                        # We don't penalize as heavily if it's the first file and we don't have last_ep
+                        if last_episode_matched is None:
+                            score -= 20.0
+                            reasons.append(f"Gentle penalty for global mismatch on DVD{dvd_number} (first file)")
+                        else:
+                            # If we have last_ep, we care more about relative sequence than absolute track match
+                            pass
 
     # 3. Filename 'Extra' detection
     if 'extra' in file_path.name.lower() and 'extra' in ep.get('name', '').lower():

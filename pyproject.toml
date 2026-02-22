@@ -16,6 +16,9 @@ dependencies = [
   "requests",
   "pytesseract",
   "pillow",
+  "langdetect",
+  "pyyaml",
+  "guessit",
 ]
 
 [project.scripts]

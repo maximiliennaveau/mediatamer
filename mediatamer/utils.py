@@ -1,6 +1,7 @@
 """MediaTamer utility functions."""
 
 import re
+from langdetect import detect
 
 def sanitize_filename(name: str) -> str:
     """Sanitize string for use in filenames."""
@@ -43,8 +44,4 @@ def detect_language(text: str) -> str:
     """
     if not text or len(text.strip()) < 50:
         return 'en'
-    try:
-        from langdetect import detect
-        return detect(text)
-    except Exception:
-        return 'en'
+    return detect(text)

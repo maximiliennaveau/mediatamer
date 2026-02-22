@@ -3,9 +3,9 @@ import re
 from pathlib import Path
 import requests
 
-from mediatamer.signals.filename import parse_filename
 from mediatamer.extract_subtitle import extract_subtitle_text, extract_credits_text
 from mediatamer.utils import detect_language
+from mediatamer.signals.guessit import extract_from_guessit
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, lang_to_tmdb_locale
 from mediatamer.signals.context import infer_context_from_path
 from mediatamer.signals.scoring import score_episode_match, parse_disc_track
@@ -14,9 +14,11 @@ from mediatamer.signals.unified import MediaSignals
 
 
 class EpisodeMatcher:
-    def __init__(self, file_path: Path, tmdb_api_key: str, show_name: Optional[str] = None, season_number: Optional[int] = None):
+    def __init__(self, file_path: Path, tmdb_api_key: str, show_name: Optional[str] = None, season_number: Optional[int] = None, scan_root: Optional[Path] = None, dvd_number: Optional[int] = None):
         self.file_path = file_path
         self.tmdb_api_key = tmdb_api_key
+        self.scan_root = scan_root
+        self.dvd_number = dvd_number
         self.tmdb_episodes = []
         self.signals = MediaSignals.from_path(file_path)
         
@@ -67,12 +69,13 @@ class EpisodeMatcher:
                     self.episode_number = best['episode'].get('episode_number')
     
     def _infer_context(self):
-        """Infer Show Name and Season from directory structure."""
-        show_name, season_number = infer_context_from_path(self.file_path)
+        """Infer Show Name, Season and DVD from directory structure."""
+        show_name, season_number, dvd_number = infer_context_from_path(self.file_path, self.scan_root)
         
         if show_name:
             self.show_name = show_name
             self.season_number = season_number
+            self.dvd_number = dvd_number
         else:
             self.season_number = None
             self.show_name = None
@@ -111,7 +114,8 @@ class EpisodeMatcher:
             'is_likely_episode': self.is_likely_episode,
             'last_episode_matched': self.last_episode_matched,
             'has_global_indices': self.has_global_indices,
-            'season_number': self.season_number
+            'season_number': self.season_number,
+            'dvd_number': self.dvd_number
         }
 
         # 2. Score
