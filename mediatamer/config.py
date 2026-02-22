@@ -10,6 +10,7 @@ DEFAULT_CONFIG_LOCATIONS = [
     Path.home() / ".config" / "mediatamer" / "config.yml",
 ]
 
+
 def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
     """Load configuration from a YAML file."""
     if path is None:
@@ -21,11 +22,12 @@ def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
         return {}
 
     try:
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             return yaml.safe_load(f) or {}
     except Exception as e:
         print(f"Warning: Failed to load config from {path}: {e}")
         return {}
+
 
 def find_config() -> Optional[Path]:
     """Search for a config file in default locations."""

@@ -8,8 +8,8 @@ from .technical import get_technical_metadata
 from .subtitle_hash import compute_file_hash, lookup_subtitle_hash
 
 __all__ = [
-    'extract_from_guessit',
-    'get_technical_metadata',
-    'compute_file_hash',
-    'lookup_subtitle_hash',
+    "extract_from_guessit",
+    "get_technical_metadata",
+    "compute_file_hash",
+    "lookup_subtitle_hash",
 ]

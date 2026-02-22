@@ -5,16 +5,19 @@ Usage:
   mediatamer compress [args...]   # calls mediatamer.compress:main
   mediatamer metadata [args...]   # calls mediatamer.extract_mkv_metadata:main
 """
+
 from __future__ import annotations
 
 import sys
 import importlib
 import argcomplete
 import argparse
-from mediatamer.organize import get_argument_parser as get_organize_parser
-from mediatamer.compress import get_agument_parser as get_compress_parser
-from mediatamer.metadata import get_agument_parser as get_metadata_parser
-from mediatamer.get_tv_shows_metadata import get_argument_parser as get_tv_metadata_parser
+from mediatamer.cli.organize import get_argument_parser as get_organize_parser
+from mediatamer.cli.compress import get_agument_parser as get_compress_parser
+from mediatamer.cli.metadata import get_agument_parser as get_metadata_parser
+from mediatamer.cli.get_tv_shows_metadata import (
+    get_argument_parser as get_tv_metadata_parser,
+)
 from mediatamer.config import load_config
 
 
@@ -33,37 +36,38 @@ def _call_module_main(module_name: str, argv: list[str]) -> int | None:
 def create_parser(config: dict[str, Any] | None = None):
     parser = argparse.ArgumentParser(
         description="MediaTamer — organize and compress media for Jellyfin",
-        prog="mediatamer"
+        prog="mediatamer",
     )
-    subparsers = parser.add_subparsers(
-        dest="command", help="Available commands")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Organize command
     organize_parser = subparsers.add_parser(
-        "organize", help="Organize video files into Jellyfin layout")
+        "organize", help="Organize video files into Jellyfin layout"
+    )
     organize_parser = get_organize_parser(organize_parser)
     if config:
-        organize_parser.set_defaults(tmdb_api_key=config.get('tmbd-api-key'))
+        organize_parser.set_defaults(tmdb_api_key=config.get("tmbd-api-key"))
 
     # Compress command
     compress_parser = subparsers.add_parser(
-        "compress", help="Compress video files for optimal streaming")
+        "compress", help="Compress video files for optimal streaming"
+    )
     compress_parser = get_compress_parser(compress_parser)
 
     # Metadata command
     metadata_parser = subparsers.add_parser(
-        "metadata", help="Extract MKV metadata to JSON and CSV")
+        "metadata", help="Extract MKV metadata to JSON and CSV"
+    )
     metadata_parser = get_metadata_parser(metadata_parser)
 
     # TV Metadata command (New name)
-    tv_parser = subparsers.add_parser(
-        "tv-metadata", help="Extract TV Show metadata")
+    tv_parser = subparsers.add_parser("tv-metadata", help="Extract TV Show metadata")
     tv_parser = get_tv_metadata_parser(tv_parser)
     if config:
         tv_parser.set_defaults(
-            tmdb_api_key=config.get('tmbd-api-key'),
-            jellyfin_url=config.get('jellyfin-url'),
-            jellyfin_api_key=config.get('jellyfin-api-key')
+            tmdb_api_key=config.get("tmbd-api-key"),
+            jellyfin_url=config.get("jellyfin-url"),
+            jellyfin_api_key=config.get("jellyfin-api-key"),
         )
 
     return parser
