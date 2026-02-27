@@ -12,11 +12,15 @@ import sys
 import importlib
 import argcomplete
 import argparse
+from typing import Any
 from mediatamer.cli.organize import get_argument_parser as get_organize_parser
 from mediatamer.cli.compress import get_agument_parser as get_compress_parser
 from mediatamer.cli.metadata import get_agument_parser as get_metadata_parser
 from mediatamer.cli.get_tv_shows_metadata import (
     get_argument_parser as get_tv_metadata_parser,
+)
+from mediatamer.cli.cache_subtitles import (
+    get_argument_parser as get_cache_subtitles_parser,
 )
 from mediatamer.config import load_config
 
@@ -70,6 +74,12 @@ def create_parser(config: dict[str, Any] | None = None):
             jellyfin_api_key=config.get("jellyfin-api-key"),
         )
 
+    # Subtitle cache command
+    cache_subtitles_parser = subparsers.add_parser(
+        "cache-subtitles", help="Bulk cache subtitles for a directory"
+    )
+    cache_subtitles_parser = get_cache_subtitles_parser(cache_subtitles_parser)
+
     return parser
 
 
@@ -92,6 +102,8 @@ def main() -> int | None:
         return _call_module_main("mediatamer.metadata", sys.argv[2:])
     if cmd in ("dvd-metadata", "tv-metadata"):
         return _call_module_main("mediatamer.get_tv_shows_metadata", sys.argv[2:])
+    if cmd == "cache-subtitles":
+        return _call_module_main("mediatamer.cli.cache_subtitles", sys.argv[2:])
 
     parser.print_help()
     return 2

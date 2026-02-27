@@ -37,6 +37,31 @@ def _check_subtitle_cache(path: Path) -> Optional[dict]:
         return None
 
 
+def _save_to_subtitle_cache(path: Path, data: dict):
+    """Save metadata to cache."""
+    cache_dir = os.environ.get("SUBTITLE_CACHE_DIR")
+    if not cache_dir:
+        return
+    cache_path = Path(cache_dir)
+    try:
+        cache_path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    file_hash = _get_file_hash(path)
+    cache_file = cache_path / f"{file_hash}.json"
+
+    # Merge with existing data if present
+    existing = _check_subtitle_cache(path) or {}
+    existing.update(data)
+
+    try:
+        with cache_file.open("w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def extract_subtitle_text(
     path: Path, prefer_non_pgs: bool = True, duration_limit: float = 600.0
 ) -> Optional[str]:
@@ -84,13 +109,18 @@ def extract_subtitle_text(
             ]
             res = subprocess.run(cmd, capture_output=True, text=True, check=True)
             if res.stdout.strip():
-                return res.stdout.strip()
+                out = res.stdout.strip()
+                _save_to_subtitle_cache(path, {"subtitle_text": out})
+                return out
         except Exception:
             continue
 
     # Fallback to OCR if requested
     if prefer_non_pgs:
-        return extract_pgs_as_text(path, duration_limit=duration_limit)
+        out = extract_pgs_as_text(path, duration_limit=duration_limit)
+        if out:
+            _save_to_subtitle_cache(path, {"subtitle_text": out})
+        return out
     return None
 
 
@@ -198,7 +228,10 @@ def extract_credits_text(
             except Exception:
                 continue
 
-    return "\n".join(text_content)
+    out = "\n".join(text_content)
+    if out:
+        _save_to_subtitle_cache(path, {"credits_text": out})
+    return out
 
 
 def compute_file_hash(path: str) -> Optional[str]:

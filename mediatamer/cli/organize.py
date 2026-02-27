@@ -5,9 +5,9 @@ import argparse
 from shutil import move, copy2
 import argcomplete
 
-from .metadata import check_ffprobe
-from .parameters import get_extensions
-from .utils import sanitize_filename, zero_pad
+from mediatamer.cli.metadata import check_ffprobe
+from mediatamer.parameters import get_extensions
+from mediatamer.utils import sanitize_filename, zero_pad
 
 
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
