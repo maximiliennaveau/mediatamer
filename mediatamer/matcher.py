@@ -5,6 +5,7 @@ from mediatamer.utils import detect_language
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, lang_to_tmdb_locale
 from mediatamer.signals.scoring import score_episode_match
+from mediatamer.signals.ai import discriminate_episodes
 from mediatamer.signals.technical import TechnicalSignals
 
 
@@ -121,12 +122,21 @@ class EpisodeMatcher:
         sub_text = getattr(self, "_sub_text_cache", None)
         credits_text = getattr(self, "_credits_text_cache", None)
 
+        # 2. Batch AI Discrimination
+        llm_scores = {}
+        if sub_text and self.tmdb_episodes:
+            print(
+                f"  [AI] Discriminating between {len(self.tmdb_episodes)} candidates..."
+            )
+            llm_scores = discriminate_episodes(sub_text, self.tmdb_episodes)
+
         context_hints = {
             "is_likely_episode": self.is_likely_episode,
             "last_episode_matched": self.last_episode_matched,
             "has_global_indices": self.has_global_indices,
             "season_number": self.season_number,
             "dvd_number": self.dvd_number,
+            "llm_scores": llm_scores,
         }
 
         # 2. Score

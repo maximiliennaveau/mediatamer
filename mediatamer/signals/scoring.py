@@ -2,7 +2,6 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from mediatamer.signals.technical import TechnicalSignals
-from mediatamer.signals.subtitle import compare_subtitle_to_description
 
 
 def parse_disc_track(filename: str) -> Optional[Dict[str, Any]]:
@@ -178,14 +177,16 @@ def score_episode_match(
     score_text(credits_text, 150.0, "credits")
 
     # 4b. LLM Subtitle/Description Match
-    if sub_text and ep.get("overview"):
-        llm_score = compare_subtitle_to_description(sub_text, ep["overview"])
+    if context_hints and "llm_scores" in context_hints:
+        llm_scores = context_hints["llm_scores"]
+        ep_num = ep.get("episode_number")
+        llm_score = llm_scores.get(ep_num, 0.0)
         if llm_score > 0:
             weight = 150.0
             added_score = llm_score * weight
             score += added_score
             reasons.append(
-                f"LLM Subtitle/Description similarity: {llm_score:.2f} (+{added_score:.1f})"
+                f"LLM discrimination score: {llm_score:.2f} (+{added_score:.1f})"
             )
 
     # 5. Cast/Crew Match
