@@ -19,8 +19,8 @@ from mediatamer.cli.metadata import get_agument_parser as get_metadata_parser
 from mediatamer.cli.get_tv_shows_metadata import (
     get_argument_parser as get_tv_metadata_parser,
 )
-from mediatamer.cli.cache_subtitles import (
-    get_argument_parser as get_cache_subtitles_parser,
+from mediatamer.cli.cache_metadata import (
+    get_argument_parser as get_cache_metadata_parser,
 )
 from mediatamer.config import load_config
 
@@ -78,7 +78,7 @@ def create_parser(config: dict[str, Any] | None = None):
     cache_subtitles_parser = subparsers.add_parser(
         "cache-subtitles", help="Bulk cache subtitles for a directory"
     )
-    cache_subtitles_parser = get_cache_subtitles_parser(cache_subtitles_parser)
+    cache_subtitles_parser = get_cache_metadata_parser(cache_subtitles_parser)
 
     return parser
 
@@ -103,7 +103,7 @@ def main() -> int | None:
     if cmd in ("dvd-metadata", "tv-metadata"):
         return _call_module_main("mediatamer.get_tv_shows_metadata", sys.argv[2:])
     if cmd == "cache-subtitles":
-        return _call_module_main("mediatamer.cli.cache_subtitles", sys.argv[2:])
+        return _call_module_main("mediatamer.cli.cache_metadata", sys.argv[2:])
 
     parser.print_help()
     return 2

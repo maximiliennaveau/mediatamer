@@ -1,12 +1,10 @@
 import sys
 from pathlib import Path
-import os
 import unittest
 from unittest.mock import MagicMock, patch
-import json
 
 # Add mediatamer to path
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from mediatamer.cli.metadata import main
 

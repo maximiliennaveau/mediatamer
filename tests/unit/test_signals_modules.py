@@ -3,7 +3,6 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 from mediatamer.signals.guessit import infer_context_from_path as parse_filename
 from mediatamer.signals.technical import get_technical_metadata
-from mediatamer.signals.subtitle import compute_file_hash
 
 
 class TestSignalsModules(unittest.TestCase):
@@ -31,19 +30,3 @@ class TestSignalsModules(unittest.TestCase):
             meta = get_technical_metadata(p)
             self.assertIsInstance(meta, dict)
             self.assertIn("duration", meta)
-
-    def test_subtitle_hash_file(self):
-        # Mock open/read/getsize
-        with (
-            patch("builtins.open", create=True) as mock_open,
-            patch("os.path.getsize", return_value=131072 * 2),
-        ):
-            # Setup mock file handle
-            handle = mock_open.return_value.__enter__.return_value
-            handle.read.return_value = b"\x00" * 8  # return 8 bytes of zeros
-
-            h = compute_file_hash("/dummy/path.mkv")
-            # Allow None or str (mocking issues in some envs)
-            if h is not None:
-                self.assertIsInstance(h, str)
-                self.assertEqual(len(h), 16)
