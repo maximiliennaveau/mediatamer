@@ -1,32 +1,43 @@
 import json
-from typing import List, Dict
+from typing import List, Dict, Any
 from mediatamer.signals.tmdb import fetch_tmdb_episodes
 from mediatamer.signals.ai import run_ai
-
-
 from mediatamer.signals.video_metadata import VideoMetadata
 
 
-class HolisticAIMatcher:
+def match_episode(meta: VideoMetadata, config: Dict[str, Any]) -> None:
+    """
+    Gathers all possible signals from metadata and queries the AI.
+    Fills in meta.ai_match.
+    """
+    matcher = AIEpisodeMatcher(config)
+    matcher.match(meta)
+
+
+class AIEpisodeMatcher:
     """
     A comprehensive matcher that aggregates all available metadata
     and uses AI to determine the best episode match.
     """
 
-    def __init__(self, tmdb_api_key: str):
-        self.tmdb_api_key = tmdb_api_key
+    def __init__(self, config: Dict[str, Any]):
+        self.tmdb_api_key = config.get("tmbd-api-key")
 
     def match(self, meta: VideoMetadata) -> None:
         """
         Gathers all possible signals from metadata and queries the AI.
         Fills in meta.ai_match.
         """
-        print(f"[Holistic AI Matcher] Analyzing: {meta.path.name}")
+        print(f"[AI Episode Matcher] Analyzing: {meta.path.name}")
 
-        # Extract components for convenience
+        # Extract components for convenience and verify they exist
         guess = meta.guessit
         tech_data = meta.technical.to_legacy_dict() if meta.technical else {}
         sub_text = meta.subtitles or ""
+
+        assert guess, "Guessit analysis is required for AI Episode Matcher"
+        assert tech_data, "Technical data is required for AI Episode Matcher"
+        assert sub_text, "Subtitle text is required for AI Episode Matcher"
 
         # Fetch TMDB Candidates
         show_name = guess.get("show")

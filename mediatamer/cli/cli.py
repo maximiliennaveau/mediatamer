@@ -74,11 +74,11 @@ def create_parser(config: dict[str, Any] | None = None):
             jellyfin_api_key=config.get("jellyfin-api-key"),
         )
 
-    # Subtitle cache command
-    cache_subtitles_parser = subparsers.add_parser(
-        "cache-subtitles", help="Bulk cache subtitles for a directory"
+    # Cache metadata command
+    cache_metadata_parser = subparsers.add_parser(
+        "cache-metadata", help="Bulk cache metadata for a directory"
     )
-    cache_subtitles_parser = get_cache_metadata_parser(cache_subtitles_parser)
+    cache_metadata_parser = get_cache_metadata_parser(cache_metadata_parser)
 
     return parser
 
@@ -95,14 +95,14 @@ def main() -> int | None:
     cmd = args.command.lower()
 
     if cmd == "organize":
-        return _call_module_main("mediatamer.organize", sys.argv[2:])
+        return _call_module_main("mediatamer.cli.organize", sys.argv[2:])
     if cmd == "compress":
-        return _call_module_main("mediatamer.compress", sys.argv[2:])
+        return _call_module_main("mediatamer.cli.compress", sys.argv[2:])
     if cmd in ("metadata", "meta"):
-        return _call_module_main("mediatamer.metadata", sys.argv[2:])
+        return _call_module_main("mediatamer.cli.metadata", sys.argv[2:])
     if cmd in ("dvd-metadata", "tv-metadata"):
-        return _call_module_main("mediatamer.get_tv_shows_metadata", sys.argv[2:])
-    if cmd == "cache-subtitles":
+        return _call_module_main("mediatamer.cli.get_tv_shows_metadata", sys.argv[2:])
+    if cmd == "cache-metadata":
         return _call_module_main("mediatamer.cli.cache_metadata", sys.argv[2:])
 
     parser.print_help()

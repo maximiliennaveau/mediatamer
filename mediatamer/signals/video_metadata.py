@@ -42,21 +42,3 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
     return VideoMetadata(
         path=path, guessit=guessit, subtitles=subtitles, ai_match=ai_match
     )
-
-
-def extract_all_metadata(
-    metadata: VideoMetadata, scan_root: Optional[Path] = None
-) -> None:
-    """Perform all extractions and populate the provided metadata object."""
-    from mediatamer.signals.technical import TechnicalSignals
-    from mediatamer.signals.guessit import infer_context_from_path
-    from mediatamer.signals.subtitle import extract_subtitle_text
-
-    # 1. Technical
-    TechnicalSignals.from_metadata(metadata)
-
-    # 2. GuessIt
-    metadata.guessit = infer_context_from_path(metadata.path, metadata, scan_root)
-
-    # 3. Subtitles
-    metadata.subtitles = extract_subtitle_text(metadata.path, metadata)
