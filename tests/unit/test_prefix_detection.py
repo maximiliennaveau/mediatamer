@@ -9,7 +9,7 @@ import shutil
 # Add the project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from mediatamer.get_tv_shows_metadata import get_tv_shows_metadata
+from mediatamer.cli.get_tv_shows_metadata import get_tv_shows_metadata
 
 
 class TestPrefixDetection(unittest.TestCase):
@@ -20,7 +20,7 @@ class TestPrefixDetection(unittest.TestCase):
         shutil.rmtree(self.test_dir)
 
     @patch("mediatamer.signals.technical.get_technical_metadata")
-    @patch("mediatamer.get_tv_shows_metadata.EpisodeMatcher")
+    @patch("mediatamer.cli.get_tv_shows_metadata.EpisodeMatcher")
     def test_multi_prefix_detection_real_fs(self, mock_matcher_cls, mock_tech):
         """Test that A and B are detected as episodes, C as bonus using a real temp FS."""
 
@@ -43,7 +43,7 @@ class TestPrefixDetection(unittest.TestCase):
         # Setup Matcher mock to capture is_likely_episode calls
         matchers = []
 
-        def matcher_init(path, api_key):
+        def matcher_init(path, api_key, **kwargs):
             m = MagicMock()
             m.candidates = []
             m.best_candidate = None

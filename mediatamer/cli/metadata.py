@@ -9,8 +9,8 @@ import re
 from typing import Dict, Any, List, Tuple, Optional
 import requests
 
-from .parameters import get_extensions
-from .utils import normalize_show_name
+from mediatamer.parameters import get_extensions
+from mediatamer.utils import normalize_show_name
 
 
 SE_EP_PATTERNS = [

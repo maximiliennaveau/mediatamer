@@ -1,12 +1,11 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 import struct
 import os
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict, Any
 import subprocess
-import os
 import json
 import hashlib
+import requests
 
 from mediatamer.signals.ffprobe import extract_metadata_ffprobe
 
@@ -246,10 +245,64 @@ def lookup_subtitle_hash(hash_str: str) -> Optional[Dict]:
     return None
 
 
+def compare_subtitle_to_description(subtitle: str, description: str) -> float:
+    """Compare subtitle to description and return a similarity score (0.0 to 1.0)."""
+    api_key = os.environ.get("LLM_API_KEY")
+    api_url = os.environ.get(
+        "LLM_API_URL", "https://api.openai.com/v1/chat/completions"
+    )
+    model = os.environ.get("LLM_MODEL", "gpt-4o-mini")
+
+    if not api_key or not subtitle or not description:
+        return 0.0
+
+    # Narrow down subtitle snippet to avoid token limits and focus on content
+    # Taking middle portion might be better for plot points
+    subtitle_snippet = subtitle[:3000]
+
+    prompt = f"""You are an expert TV show episode matcher. I will provide you with a snippet of extracted subtitles from a video file and an episode description. 
+Your task is to determine if the subtitles match the episode description.
+
+Subtitle Snippet:
+---
+{subtitle_snippet}
+---
+
+Episode Description:
+---
+{description}
+---
+
+Return a JSON object with a single key "score" containing a float between 0.0 and 1.0, where 1.0 is a perfect match and 0.0 is no match. Only return the JSON object."""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+        }
+        resp = requests.post(api_url, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        return float(result.get("score", 0.0))
+    except Exception as e:
+        # Fallback to 0.0 on error
+        print(f"LLM Comparison Error: {e}")
+        return 0.0
+
+
 __all__ = [
     "extract_subtitle_text",
     "extract_pgs_as_text",
     "extract_credits_text",
     "compute_file_hash",
     "lookup_subtitle_hash",
+    "compare_subtitle_to_description",
 ]

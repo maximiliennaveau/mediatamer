@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from mediatamer.extract_subtitle import extract_subtitle_text
+from mediatamer.signals.subtitle import extract_subtitle_text
 
 
 class TestExtractSubtitle(unittest.TestCase):

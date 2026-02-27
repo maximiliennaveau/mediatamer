@@ -1,14 +1,10 @@
 from typing import List, Dict, Any, Optional
-import re
 from pathlib import Path
-import requests
-
-from mediatamer.extract_subtitle import extract_subtitle_text, extract_credits_text
+from mediatamer.signals.subtitle import extract_subtitle_text, extract_credits_text
 from mediatamer.utils import detect_language
-from mediatamer.signals.guessit import extract_from_guessit
+from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, lang_to_tmdb_locale
-from mediatamer.signals.context import infer_context_from_path
-from mediatamer.signals.scoring import score_episode_match, parse_disc_track
+from mediatamer.signals.scoring import score_episode_match
 from mediatamer.signals.technical import TechnicalSignals
 
 

@@ -64,9 +64,8 @@ class TestMatcher(unittest.TestCase):
 
         with (
             patch(
-                "mediatamer.signals.unified.MediaSignals.from_path"
+                "mediatamer.signals.technical.TechnicalSignals.from_path"
             ) as mock_media_signals,
-            patch("mediatamer.matcher.parse_filename") as mock_parse,
             patch("mediatamer.matcher.extract_subtitle_text") as mock_sub,
             patch("mediatamer.matcher.extract_credits_text") as mock_credits,
             patch("mediatamer.matcher.infer_context_from_path") as mock_infer,
@@ -78,7 +77,6 @@ class TestMatcher(unittest.TestCase):
             m.embedded_title = "The Zygon Invasion"
             mock_media_signals.return_value = m
 
-            mock_parse.return_value = {"season": None, "episode": None}
             mock_sub.return_value = "The Zygon Invasion"
             mock_credits.return_value = "The Zygon Invasion\nDoctor Who"
             mock_infer.return_value = ("Doctor Who", 9, 3)
@@ -101,7 +99,7 @@ class TestMatcher(unittest.TestCase):
         self.assertEqual(self.matcher.show_name, "Doctor Who")
 
     @patch("mediatamer.matcher.requests.get")
-    @patch("mediatamer.signals.unified.MediaSignals.from_path")
+    @patch("mediatamer.signals.technical.TechnicalSignals.from_path")
     @patch("mediatamer.matcher.extract_subtitle_text")
     @patch("mediatamer.matcher.extract_credits_text")
     def test_global_index_matching(

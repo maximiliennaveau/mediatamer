@@ -1,17 +1,16 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from mediatamer.signals.filename import parse_filename
+from pathlib import Path
+from mediatamer.signals.guessit import extract_from_guessit as parse_filename
 from mediatamer.signals.technical import get_technical_metadata
-from mediatamer.signals.subtitle_hash import compute_file_hash
+from mediatamer.signals.subtitle import compute_file_hash
 
 
 class TestSignalsModules(unittest.TestCase):
     def test_parse_filename_basic(self):
         # Mock pathlib.Path.exists to return True
         with patch("pathlib.Path.exists", return_value=True):
-            p = MagicMock()
-        p.name = "B1_t00.mkv"
-        p.parent.name = "Doctor_Who_S9_DVD1"
+            p = Path("/data/videos/unsorted_videos/Doctor_Who_S9_DVD1/B1_t00.mkv")
 
         # Test the parsing logic directly (mocking internal guessit if needed, but basic should work)
         r = parse_filename(p)
@@ -21,7 +20,7 @@ class TestSignalsModules(unittest.TestCase):
 
     def test_technical_metadata(self):
         # Mock subprocess.run in metadata module
-        with patch("mediatamer.metadata.subprocess.run") as mock_run:
+        with patch("mediatamer.cli.metadata.subprocess.run") as mock_run:
             mock_run.return_value.stdout = '{"format": {"duration": "120.0"}}'
             mock_run.return_value.returncode = 0
 

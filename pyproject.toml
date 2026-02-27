@@ -22,4 +22,4 @@ dependencies = [
 ]
 
 [project.scripts]
-mediatamer = "mediatamer.cli:main"
+mediatamer = "mediatamer.cli.cli:main"

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from mediatamer.get_tv_shows_metadata import get_tv_shows_metadata
+from mediatamer.cli.get_tv_shows_metadata import get_tv_shows_metadata
 
 
 DATA_DIR = Path("/data/videos/unsorted_videos/Doctor_Who_S9_DVD3")
@@ -20,7 +20,7 @@ DATA_DIR = Path("/data/videos/unsorted_videos/Doctor_Who_S9_DVD3")
 class TestDVDMetadataExtraction(unittest.TestCase):
     @patch("builtins.open", new_callable=MagicMock)
     @patch("pathlib.Path.mkdir")
-    @patch("mediatamer.get_tv_shows_metadata.EpisodeMatcher")
+    @patch("mediatamer.cli.get_tv_shows_metadata.EpisodeMatcher")
     @patch("pathlib.Path.iterdir")
     def test_parsing_doctor_who_season_9_dvd3(
         self, mock_iterdir, mock_matcher_cls, mock_mkdir, mock_open
@@ -59,8 +59,8 @@ class TestDVDMetadataExtraction(unittest.TestCase):
         dvd_dir.exists.return_value = True
         dvd_dir.is_file.return_value = False
         dvd_dir.is_dir.return_value = True
-        # mock files via glob
-        dvd_dir.glob.return_value = [f1]
+        # mock files via rglob
+        dvd_dir.rglob.return_value = [f1]
 
         # Call the function under test (API)
         data = get_tv_shows_metadata(dvd_dir, api_key="DUMMY_KEY")

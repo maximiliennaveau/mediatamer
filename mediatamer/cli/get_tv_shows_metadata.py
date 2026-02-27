@@ -7,12 +7,13 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+import requests
 import argcomplete
 
 from mediatamer.matcher import EpisodeMatcher
-from mediatamer.metadata import extract_metadata, find_parent_show_and_season
+from mediatamer.cli.metadata import extract_metadata, find_parent_show_and_season
 from mediatamer.parameters import get_extensions
-from mediatamer.signals.context import infer_context_from_path
+from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.technical import TechnicalSignals
 
 

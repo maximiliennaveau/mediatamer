@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 import re
 
-from mediatamer.get_tv_shows_metadata import get_tv_shows_metadata
+from mediatamer.cli.get_tv_shows_metadata import get_tv_shows_metadata
 from unittest.mock import patch, MagicMock
 
 
