@@ -1,12 +1,12 @@
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.signals.subtitle import extract_subtitle_text, extract_credits_text
 from mediatamer.utils import detect_language
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, lang_to_tmdb_locale
 from mediatamer.signals.scoring import score_episode_match
 from mediatamer.signals.ai import discriminate_episodes
-from mediatamer.signals.technical import TechnicalSignals
 
 
 class EpisodeMatcher:
@@ -24,7 +24,12 @@ class EpisodeMatcher:
         self.scan_root = scan_root
         self.dvd_number = dvd_number
         self.tmdb_episodes = []
-        self.signals = TechnicalSignals.from_path(file_path)
+
+        # Use unified VideoMetadata instead of direct TechnicalSignals
+        self.metadata = VideoMetadata(file_path)
+        from mediatamer.signals.technical import TechnicalSignals
+
+        self.signals = TechnicalSignals.from_metadata(self.metadata)
 
         # Result Attributes
         self.show_name = show_name
@@ -53,10 +58,12 @@ class EpisodeMatcher:
         if self.show_name:
             # Detect language and extract credits using optimized ranges
             sub_text = extract_subtitle_text(
-                self.file_path, prefer_non_pgs=True, duration_limit=600.0
+                self.file_path, self.metadata, prefer_non_pgs=True, duration_limit=600.0
             )
             credits_text = extract_credits_text(
-                self.file_path, custom_ranges=self.signals.suggested_ocr_ranges
+                self.file_path,
+                self.metadata,
+                custom_ranges=self.signals.suggested_ocr_ranges,
             )
             # Cache so _match_file can reuse without re-extracting
             self._sub_text_cache = sub_text
@@ -80,7 +87,7 @@ class EpisodeMatcher:
 
     def _infer_context(self):
         """Infer Show Name, Season and DVD from directory structure."""
-        meta = infer_context_from_path(self.file_path, self.scan_root)
+        meta = infer_context_from_path(self.file_path, self.metadata, self.scan_root)
         show_name = meta.get("show")
         season_number = meta.get("season")
         dvd_number = meta.get("dvd")

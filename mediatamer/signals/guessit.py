@@ -1,8 +1,11 @@
 import guessit
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from mediatamer.utils import normalize_show_name
+
+if TYPE_CHECKING:
+    from mediatamer.signals.video_metadata import VideoMetadata
 
 
 def _to_int(val: Any) -> Optional[int]:
@@ -18,7 +21,7 @@ def _to_int(val: Any) -> Optional[int]:
 
 
 def infer_context_from_path(
-    file_path: Path, root_path: Optional[Path] = None
+    file_path: Path, metadata: "VideoMetadata", root_path: Optional[Path] = None
 ) -> Dict[str, Any]:
     """Robustly infer show metadata by walking up the directory tree and parsing the filename.
 
@@ -97,5 +100,8 @@ def infer_context_from_path(
     f_series = gi_file.get("series")
     if f_series:
         out["show"] = normalize_show_name(f_series)
+
+    if metadata:
+        metadata.guessit = out
 
     return out

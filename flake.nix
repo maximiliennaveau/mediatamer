@@ -45,8 +45,7 @@
           description = "MediaTamer — organize media and extract MKV metadata";
           license = licenses.mit;
         };
-        # doCheck = true;
-        doCheck = false;
+        doCheck = true;
         pythonImportsCheck = [ "mediatamer" ];
       };
 

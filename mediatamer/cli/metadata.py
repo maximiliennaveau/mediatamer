@@ -11,6 +11,8 @@ import requests
 
 from mediatamer.parameters import get_extensions
 from mediatamer.utils import normalize_show_name
+from mediatamer.ai_matcher import HolisticAIMatcher
+from mediatamer.signals.cache import get_or_create_metadata
 
 
 SE_EP_PATTERNS = [
@@ -213,7 +215,7 @@ def lookup_episode_info(
 
     try:
         # First, search for the TV show
-        search_url = f"https://api.themoviedb.org/3/search/tv"
+        search_url = "https://api.themoviedb.org/3/search/tv"
         params = {
             "api_key": api_key,
             "query": show_name,
@@ -321,111 +323,43 @@ def stream_info_summary(stream: Dict[str, Any]) -> Dict[str, Any]:
 def extract_metadata(
     path: Path, input_root: Path = None, api_key: str = None, language: str = "en-US"
 ) -> Dict[str, Any]:
-    """Extract comprehensive metadata including technical and content information."""
-    j = ffprobe_json(path)
-    out = {}
-    fmt = j.get("format", {})
+    """Simplified metadata extraction using unified signals and cache."""
+    # 1. Use the unified metadata object (with cache)
+    meta = get_or_create_metadata(path, input_root)
 
-    # Basic file information
+    # 2. Re-map to the legacy dictionary format expected by the CLI outputs
+    out = {}
+    guess = meta.guessit
+    tech = meta.technical
+
     out["filename"] = path.name
     out["filepath"] = str(path)
-    out["format_name"] = fmt.get("format_name")
-    out["format_long_name"] = fmt.get("format_long_name")
-    out["duration"] = float(fmt.get("duration")) if fmt.get("duration") else None
-    out["size"] = int(fmt.get("size")) if fmt.get("size") else None
-    out["bit_rate"] = int(fmt.get("bit_rate")) if fmt.get("bit_rate") else None
+    out["show_name"] = guess.get("show")
+    out["season"] = guess.get("season")
+    out["episode_start"] = guess.get("episode")
+    out["episode_end"] = guess.get("episode_end")
 
-    # Parse content information from filename and path
-    if input_root:
-        # Determine the effective root for parsing (go up if input_root looks like a season/specials dir)
-        effective_root = input_root
-        root_name = input_root.name.lower()
-        if (
-            extract_season_only(root_name) is not None
-            or "special" in root_name
-            or "extra" in root_name
-            or "bonus" in root_name
-        ):
-            # If input_root is a season/special directory, use its parent for show detection
-            effective_root = input_root.parent
+    if tech:
+        out["duration"] = tech.duration
+        out["size"] = tech.ffprobe.get("format", {}).get("size")
+        out["bit_rate"] = tech.ffprobe.get("format", {}).get("bit_rate")
 
-        show_name, season = find_parent_show_and_season(path, effective_root)
-        season_parsed, ep1, ep2 = extract_se_ep_from_name(path.name)
+        # Stream info for legacy CSV
+        streams = tech.ffprobe.get("streams", [])
+        out["video"] = None
+        out["audios"] = []
+        out["subtitles"] = []
+        for s in streams:
+            si = stream_info_summary(s)
+            if s.get("codec_type") == "video" and out["video"] is None:
+                out["video"] = si
+            elif s.get("codec_type") == "audio":
+                out["audios"].append(si)
+            elif s.get("codec_type") == "subtitle":
+                out["subtitles"].append(si)
 
-        # Use parsed season if not found in path
-        if season is None:
-            season = season_parsed
-
-        out["show_name"] = show_name
-        out["season"] = season
-        out["episode_start"] = ep1
-        out["episode_end"] = ep2
-
-        # Handle special episodes and season numbering
-        # Less than 30 minutes
-        if season == 0 or (out["duration"] and out["duration"] < 1800):
-            out["is_special"] = True
-            # Check for special season patterns like 4.5
-            special_season = parse_special_season(path.name)
-            if special_season:
-                out["season"] = special_season
-        else:
-            out["is_special"] = False
-
-        # Try to get episode title from web
-        embedded_title = None
-        for stream in j.get("streams", []):
-            stream_tags = stream.get("tags", {})
-            if stream_tags.get("title"):
-                embedded_title = stream_tags["title"]
-                break
-
-        # Check if embedded title is useful
-        title_is_useful = (
-            embedded_title
-            and len(embedded_title) > 2
-            and not embedded_title.lower()
-            in ["stereo", "mono", "left", "right", "audio", "video"]
-            and not re.search(
-                r"\b(stereo|mono|audio|video|track|channel)\b", embedded_title, re.I
-            )
-        )
-
-        if title_is_useful:
-            out["episode_title"] = embedded_title
-        elif api_key and show_name and season and ep1:
-            # Try web lookup
-            web_info = lookup_episode_info(show_name, season, ep1, api_key, language)
-            if web_info and web_info.get("title"):
-                out["episode_title"] = web_info["title"]
-                out["episode_overview"] = web_info.get("overview", "")
-                out["air_date"] = web_info.get("air_date", "")
-            else:
-                out["episode_title"] = embedded_title or "Unknown"
-        else:
-            out["episode_title"] = embedded_title or "Unknown"
-    else:
-        out["show_name"] = None
-        out["season"] = None
-        out["episode_start"] = None
-        out["episode_end"] = None
-        out["is_special"] = None
-        out["episode_title"] = None
-
-    # Stream information
-    streams = j.get("streams", [])
-    out["video"] = None
-    out["audios"] = []
-    out["subtitles"] = []
-    for s in streams:
-        si = stream_info_summary(s)
-        if s.get("codec_type") == "video" and out["video"] is None:
-            out["video"] = si
-        elif s.get("codec_type") == "audio":
-            out["audios"].append(si)
-        elif s.get("codec_type") == "subtitle":
-            out["subtitles"].append(si)
-
+    # Note: TMDB enrichment for title/overview could be added here if needed,
+    # but the HolisticAIMatcher handles the best matching logic now.
     return out
 
 
@@ -537,6 +471,11 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
         default="en-US",
         help="Language for TMDB lookup (e.g., fr-FR, en-US)",
     )
+    parser.add_argument(
+        "--ai",
+        action="store_true",
+        help="Use Holistic AI Matcher for episode detection",
+    )
     return parser
 
 
@@ -564,9 +503,28 @@ def main():
         return
 
     rows = []
+    ai_matcher = None
+    if args.ai:
+        if not tmdb_key:
+            print("Error: --ai requires --tmdb-api-key or config setting.")
+            return
+        ai_matcher = HolisticAIMatcher(tmdb_api_key=tmdb_key)
+
     for f in files:
         try:
-            meta = extract_metadata(f, input_dir, tmdb_key, args.language)
+            if args.ai:
+                from mediatamer.signals.cache import save_metadata
+
+                meta_obj = get_or_create_metadata(f, input_dir)
+                ai_matcher.match(meta_obj)
+                save_metadata(meta_obj)
+
+                # Convert to the legacy dictionary format for output
+                meta = extract_metadata(f, input_dir, tmdb_key, args.language)
+                # Add AI match info to the dict
+                meta["ai_match"] = meta_obj.ai_match
+            else:
+                meta = extract_metadata(f, input_dir, tmdb_key, args.language)
         except Exception as e:
             print(f"Error extracting metadata for {f}: {e}")
             continue

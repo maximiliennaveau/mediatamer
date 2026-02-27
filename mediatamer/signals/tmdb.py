@@ -37,7 +37,7 @@ def fetch_tmdb_episodes(
         if is_extras:
             search_query = search_query.replace(" - Extras", "")
 
-        search_url = f"https://api.themoviedb.org/3/search/tv"
+        search_url = "https://api.themoviedb.org/3/search/tv"
         params = {"api_key": api_key, "query": search_query, "language": "en-US"}
         resp = requests.get(search_url, params=params, timeout=10)
         if not resp.ok:
@@ -85,6 +85,7 @@ def fetch_tmdb_episodes(
                         if cr.ok:
                             cr_data = cr.json()
                             ep["crew"] = cr_data.get("crew", [])
+                            ep["cast"] = cr_data.get("cast", [])
                             ep["guest_stars"] = cr_data.get("guest_stars", [])
                 return eps
             return []

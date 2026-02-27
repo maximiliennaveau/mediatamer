@@ -14,7 +14,7 @@ from mediatamer.matcher import EpisodeMatcher
 from mediatamer.cli.metadata import extract_metadata, find_parent_show_and_season
 from mediatamer.parameters import get_extensions
 from mediatamer.signals.guessit import infer_context_from_path
-from mediatamer.signals.technical import TechnicalSignals
+from mediatamer.signals.video_metadata import VideoMetadata
 
 
 def get_next_bonus_number(show: str, season: int, sorted_dir: Optional[Path]) -> int:
@@ -104,7 +104,11 @@ def get_tv_shows_metadata(
     groups = {}  # (show, season) -> list of file indices
 
     for i, f in enumerate(files):
-        sig = TechnicalSignals.from_path(f)
+        vmeta = VideoMetadata(f)
+        from mediatamer.signals.video_metadata import extract_all_metadata
+
+        extract_all_metadata(vmeta, root_context)
+        sig = vmeta.technical
         duration = sig.duration
         prefix = f.name[0].upper() if f.name else "?"
         if prefix not in prefixes:
@@ -112,7 +116,7 @@ def get_tv_shows_metadata(
         prefixes[prefix].append(duration)
 
         # Infer context (show, season, dvd) for grouping and sorting
-        meta = infer_context_from_path(f, root_context)
+        meta = infer_context_from_path(f, vmeta, root_context)
         show = meta.get("show")
         season = meta.get("season")
         dvd = meta.get("dvd")
@@ -130,6 +134,7 @@ def get_tv_shows_metadata(
                 "season": season,
                 "dvd": dvd or 0,
                 "signals": sig,
+                "metadata": vmeta,
             }
         )
 

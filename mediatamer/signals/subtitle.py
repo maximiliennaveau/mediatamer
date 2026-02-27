@@ -1,72 +1,14 @@
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, TYPE_CHECKING
 import os
 from pathlib import Path
 import subprocess
-import json
-import hashlib
 import re
 from datetime import timedelta
 
+if TYPE_CHECKING:
+    from mediatamer.signals.video_metadata import VideoMetadata
+
 from mediatamer.signals.ffprobe import extract_metadata_ffprobe
-
-
-def _get_file_hash(path: Path) -> str:
-    """Get a hash of the file for cache key."""
-    stat = path.stat()
-    return hashlib.md5(
-        f"{path.name}_{stat.st_size}_{stat.st_mtime}".encode()
-    ).hexdigest()
-
-
-def _check_subtitle_cache(path: Path) -> Optional[dict]:
-    """Check if subtitles are cached for this file."""
-    cache_dir = os.environ.get("SUBTITLE_CACHE_DIR")
-    if not cache_dir:
-        return None
-    cache_path = Path(cache_dir)
-    if not cache_path.exists():
-        return None
-    file_hash = _get_file_hash(path)
-    cache_file = cache_path / f"{file_hash}.json"
-    if not cache_file.exists():
-        return None
-    try:
-        with cache_file.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-
-def _save_to_subtitle_cache(path: Path, data: dict):
-    """Save metadata to cache."""
-    cache_dir = os.environ.get("SUBTITLE_CACHE_DIR")
-    if not cache_dir:
-        return
-    cache_path = Path(cache_dir)
-    try:
-        cache_path.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return
-
-    file_hash = _get_file_hash(path)
-    cache_file = cache_path / f"{file_hash}.json"
-
-    # Merge with existing data if present
-    existing = {}
-    if cache_file.exists():
-        try:
-            with cache_file.open("r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except Exception:
-            pass
-
-    existing.update(data)
-
-    try:
-        with cache_file.open("w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2, ensure_ascii=False)
-    except Exception:
-        pass
 
 
 class SRTParser:
@@ -128,14 +70,6 @@ class SRTParser:
         return "\n".join(e["text"] for e in filtered)
 
 
-def get_cached_subtitles(path: Path) -> Optional[str]:
-    """Retrieve full SRT content from cache if available."""
-    cached = _check_subtitle_cache(path)
-    if cached:
-        return cached.get("subtitle_srt") or cached.get("subtitle_text")
-    return None
-
-
 def get_subtitle_segment(
     path: Path, start_time: Optional[float] = None, end_time: Optional[float] = None
 ) -> Optional[str]:
@@ -144,9 +78,9 @@ def get_subtitle_segment(
         return None
 
     # 1. Try Cache
-    srt_content = get_cached_subtitles(path)
-    if srt_content:
-        return SRTParser(srt_content).get_range_text(start_time, end_time)
+    # This now depends on the caller passing a populated metadata object
+    # or the caller using cache.load_metadata(path)
+    pass
 
     # 2. Try Text Streams
     srt_content = _extract_text_sub_streams(path)
@@ -223,7 +157,6 @@ def _extract_text_sub_streams(path: Path) -> Optional[str]:
             res = subprocess.run(cmd, capture_output=True, text=True, check=True)
             if res.stdout.strip():
                 out = res.stdout.strip()
-                _save_to_subtitle_cache(path, {"subtitle_srt": out})
                 return out
         except Exception:
             continue
@@ -303,12 +236,14 @@ def _ocr_subtitle_ranges(
 
 
 def extract_subtitle_text(
-    path: Path, prefer_non_pgs: bool = True, duration_limit: float = 600.0
+    path: Path,
+    metadata: "VideoMetadata",
+    prefer_non_pgs: bool = True,
+    duration_limit: float = 600.0,
 ) -> Optional[str]:
     """Extract first available text subtitle stream, or fallback to OCR."""
-    cached = get_cached_subtitles(path)
-    if cached:
-        return cached
+    if metadata and metadata.subtitles:
+        return metadata.subtitles
 
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -316,11 +251,16 @@ def extract_subtitle_text(
     # 1. Try text streams
     out = _extract_text_sub_streams(path)
     if out:
+        if metadata:
+            metadata.subtitles = out
         return out
 
     # 2. Fallback to OCR if requested
     if prefer_non_pgs:
-        return extract_pgs_as_text(path, duration_limit=duration_limit)
+        res = extract_pgs_as_text(path, duration_limit=duration_limit)
+        if metadata:
+            metadata.subtitles = res
+        return res
     return None
 
 
@@ -344,21 +284,21 @@ def extract_pgs_as_text(path: Path, duration_limit: float = 600.0) -> Optional[s
     """OCR PGS/DVD subtitles."""
     # This is a wrapper around _ocr_subtitle_ranges but for a single range
     out = _ocr_subtitle_ranges(path, [(0.0, duration_limit)])
-    if out:
-        _save_to_subtitle_cache(path, {"credits_text": out})
     return out
 
 
 def extract_credits_text(
     path: Path,
+    metadata: "VideoMetadata",
     opening_duration: float = 180.0,
     closing_duration: float = 180.0,
     custom_ranges: Optional[List[Tuple[float, float]]] = None,
 ) -> Optional[str]:
     """Extract text from specified ranges using cached SRT or OCR."""
-    cached = _check_subtitle_cache(path)
-    if cached and cached.get("credits_text"):
-        return cached["credits_text"]
+    if metadata.subtitles:
+        # If we have full subtitles, we can extract credits from them
+        parser = SRTParser(metadata.subtitles)
+        # We'll re-calculate ranges below
 
     if not path.exists():
         return None
@@ -374,19 +314,16 @@ def extract_credits_text(
         ]
 
     # 2. Try to get from existing SRT/Text streams first (fast)
-    srt_content = get_cached_subtitles(path) or _extract_text_sub_streams(path)
+    srt_content = _extract_text_sub_streams(path)
     if srt_content:
         parser = SRTParser(srt_content)
         results = [parser.get_range_text(r[0], r[0] + r[1]) for r in ranges]
         out = "\n".join(filter(None, results))
         if out:
-            _save_to_subtitle_cache(path, {"credits_text": out})
             return out
 
     # 3. Fallback to OCR
     out = _ocr_subtitle_ranges(path, ranges)
-    if out:
-        _save_to_subtitle_cache(path, {"credits_text": out})
     return out
 
 
@@ -394,7 +331,6 @@ __all__ = [
     "extract_subtitle_text",
     "extract_pgs_as_text",
     "extract_credits_text",
-    "get_cached_subtitles",
     "get_subtitle_segment",
     "get_subtitle_beginning",
     "get_subtitle_credits",

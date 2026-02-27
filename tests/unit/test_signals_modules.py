@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
-from mediatamer.signals.guessit import extract_from_guessit as parse_filename
+from mediatamer.signals.guessit import infer_context_from_path as parse_filename
 from mediatamer.signals.technical import get_technical_metadata
 from mediatamer.signals.subtitle import compute_file_hash
 

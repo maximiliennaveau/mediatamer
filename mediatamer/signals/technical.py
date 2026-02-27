@@ -1,6 +1,9 @@
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
+
+if TYPE_CHECKING:
+    from mediatamer.signals.video_metadata import VideoMetadata
 
 from mediatamer.signals.ffprobe import extract_metadata_ffprobe
 from mediatamer.signals.mkvmerge import extract_metadata_mkvmerge
@@ -15,13 +18,19 @@ class TechnicalSignals:
     mediainfo: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_path(cls, path: Path):
-        """Factory to create signals."""
+    def from_metadata(cls, metadata: "VideoMetadata") -> "TechnicalSignals":
+        """Factory to create signals using the unified metadata context."""
+        path = metadata.path
         signals = cls(path=path)
         signals.ffprobe = extract_metadata_ffprobe(path)
         signals.mkvmerge = extract_metadata_mkvmerge(path)
         signals.mediainfo = extract_metadata_mediainfo(path)
+        metadata.technical = signals
         return signals
+
+    def update_video_metadata(self, metadata: "VideoMetadata"):
+        """Populate VideoMetadata with technical signals."""
+        metadata.technical = self
 
     def to_legacy_dict(self) -> Dict[str, Any]:
         """Convert to the dictionary format expected by legacy code."""
@@ -101,10 +110,6 @@ class TechnicalSignals:
             # Heuristic: chapters at 1/3, 2/3 of duration are likely episode boundaries
             # Let's scan 90s before and after each chapter boundary for safety
             for chap in self.chapters:
-                start_ms = float(
-                    chap.get("num_entries", 0)
-                )  # wait, mkvmerge -J chapter format?
-                # Need to check mkvmerge -J chapter format.
                 # Usually it is 'start_time' in nanoseconds.
                 start_ns = chap.get("start")
                 if start_ns:
