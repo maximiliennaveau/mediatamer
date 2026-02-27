@@ -9,7 +9,7 @@ class TestMatcher(unittest.TestCase):
     DATA_DIR = Path("/data/videos/unsorted_videos/Doctor_Who_S9_DVD3")
     TMDB_API_KEY = "DUMMY_KEY"  # Mocked
 
-    @patch("mediatamer.matcher.requests.get")
+    @patch("mediatamer.signals.tmdb.requests.get")
     def setUp(self, mock_get):
         self.mock_show_search = {
             "results": [
@@ -79,7 +79,7 @@ class TestMatcher(unittest.TestCase):
 
             mock_sub.return_value = "The Zygon Invasion"
             mock_credits.return_value = "The Zygon Invasion\nDoctor Who"
-            mock_infer.return_value = ("Doctor Who", 9, 3)
+            mock_infer.return_value = {"show": "Doctor Who", "season": 9, "dvd": 3}
 
             self.matcher = EpisodeMatcher(
                 self.mock_path, tmdb_api_key=self.TMDB_API_KEY
@@ -98,7 +98,7 @@ class TestMatcher(unittest.TestCase):
         """Test fetched show name."""
         self.assertEqual(self.matcher.show_name, "Doctor Who")
 
-    @patch("mediatamer.matcher.requests.get")
+    @patch("mediatamer.signals.tmdb.requests.get")
     @patch("mediatamer.signals.technical.TechnicalSignals.from_path")
     @patch("mediatamer.matcher.extract_subtitle_text")
     @patch("mediatamer.matcher.extract_credits_text")

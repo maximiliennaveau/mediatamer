@@ -79,9 +79,10 @@ class EpisodeMatcher:
 
     def _infer_context(self):
         """Infer Show Name, Season and DVD from directory structure."""
-        show_name, season_number, dvd_number = infer_context_from_path(
-            self.file_path, self.scan_root
-        )
+        meta = infer_context_from_path(self.file_path, self.scan_root)
+        show_name = meta.get("show")
+        season_number = meta.get("season")
+        dvd_number = meta.get("dvd")
 
         if show_name:
             self.show_name = show_name

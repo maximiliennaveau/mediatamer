@@ -20,11 +20,14 @@ DATA_DIR = Path("/data/videos/unsorted_videos/Doctor_Who_S9_DVD3")
 class TestDVDMetadataExtraction(unittest.TestCase):
     @patch("builtins.open", new_callable=MagicMock)
     @patch("pathlib.Path.mkdir")
+    @patch("mediatamer.cli.get_tv_shows_metadata.infer_context_from_path")
     @patch("mediatamer.cli.get_tv_shows_metadata.EpisodeMatcher")
     @patch("pathlib.Path.iterdir")
     def test_parsing_doctor_who_season_9_dvd3(
-        self, mock_iterdir, mock_matcher_cls, mock_mkdir, mock_open
+        self, mock_iterdir, mock_matcher_cls, mock_infer, mock_mkdir, mock_open
     ):
+        # Setup Infer Context
+        mock_infer.return_value = {"show": "Doctor Who", "season": 9, "dvd": 3}
         # Setup Matcher Instance
         mock_matcher_instance = mock_matcher_cls.return_value
         mock_matcher_instance.show_name = "Doctor Who"

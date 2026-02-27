@@ -112,7 +112,10 @@ def get_tv_shows_metadata(
         prefixes[prefix].append(duration)
 
         # Infer context (show, season, dvd) for grouping and sorting
-        show, season, dvd = infer_context_from_path(f, root_context)
+        meta = infer_context_from_path(f, root_context)
+        show = meta.get("show")
+        season = meta.get("season")
+        dvd = meta.get("dvd")
         group_key = (show, season)
         if group_key not in groups:
             groups[group_key] = []
