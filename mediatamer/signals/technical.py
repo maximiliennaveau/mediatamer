@@ -1,13 +1,11 @@
+from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
-from dataclasses import dataclass, field
+import subprocess
 
 if TYPE_CHECKING:
     from mediatamer.signals.video_metadata import VideoMetadata
-
-from mediatamer.signals.ffprobe import extract_metadata_ffprobe
-from mediatamer.signals.mkvmerge import extract_metadata_mkvmerge
-from mediatamer.signals.mediainfo import extract_metadata_mediainfo
 
 
 @dataclass
@@ -22,9 +20,9 @@ class TechnicalSignals:
         """Factory to create signals using the unified metadata context."""
         path = metadata.path
         signals = cls(path=path)
-        signals.ffprobe = extract_metadata_ffprobe(path)
-        signals.mkvmerge = extract_metadata_mkvmerge(path)
-        signals.mediainfo = extract_metadata_mediainfo(path)
+        signals.ffprobe = cls._extract_metadata_ffprobe(path)
+        signals.mkvmerge = cls._extract_metadata_mkvmerge(path)
+        signals.mediainfo = cls._extract_metadata_mediainfo(path)
         metadata.technical = signals
         return signals
 
@@ -128,11 +126,90 @@ class TechnicalSignals:
     @property
     def encoding_date(self) -> Optional[str]:
         if not self.mediainfo:
-            self.mediainfo = extract_metadata_mediainfo(self.path)
+            self.mediainfo = self._extract_metadata_mediainfo(self.path)
         for track in self.mediainfo.get("media", {}).get("track", []):
             if track.get("@type") == "General":
                 return track.get("Encoded_Date")
         return None
+
+    def _extract_metadata_mkvmerge(path: Path) -> Dict[str, Any]:
+        """
+        Extract metadata from an MKV file using mkvmerge -J and return it as a dictionary.
+
+        Args:
+            path: Path to the MKV file.
+
+        Returns:
+            A dictionary containing the JSON output from mkvmerge.
+        """
+        if not path.exists():
+            return {"error": f"File not found: {path}"}
+
+        cmd = ["mkvmerge", "-J", str(path)]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return json.loads(res.stdout)
+        except subprocess.CalledProcessError as e:
+            return {"error": "mkvmerge failed", "stderr": e.stderr}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _extract_metadata_ffprobe(path: Path) -> Dict[str, Any]:
+        """
+        Extract metadata from a video file using ffprobe and return it as a dictionary.
+
+        Args:
+            path: Path to the video file.
+
+        Returns:
+            A dictionary containing the JSON output from ffprobe.
+        """
+        if not path.exists():
+            return {"error": f"File not found: {path}"}
+
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            "-show_chapters",
+            str(path),
+        ]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return json.loads(res.stdout)
+        except subprocess.CalledProcessError as e:
+            return {"error": "ffprobe failed", "stderr": e.stderr}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _extract_metadata_mediainfo(path: Path) -> Dict[str, Any]:
+        """
+        Extract metadata from a video file using mediainfo --Output=JSON and return it as a dictionary.
+
+        Args:
+            path: Path to the video file.
+
+        Returns:
+            A dictionary containing the JSON output from mediainfo.
+        """
+        if not path.exists():
+            return {"error": f"File not found: {path}"}
+
+        cmd = ["mediainfo", "--Output=JSON", str(path)]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return json.loads(res.stdout)
+        except subprocess.CalledProcessError as e:
+            return {"error": "mediainfo failed", "stderr": e.stderr}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 def get_technical_metadata(path: Path) -> Dict[str, Any]:
