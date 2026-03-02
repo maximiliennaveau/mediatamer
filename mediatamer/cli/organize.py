@@ -5,7 +5,6 @@ import argparse
 from shutil import move, copy2
 import argcomplete
 
-from mediatamer.cli.metadata import check_ffprobe
 from mediatamer.parameters import get_extensions
 from mediatamer.utils import sanitize_filename, zero_pad
 
@@ -61,8 +60,6 @@ def main():
 
     config = load_config()
     tmdb_key = args.tmdb_api_key or config.get("tmbd-api-key")
-
-    check_ffprobe()
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()

@@ -1,8 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
-
-from mediatamer.matcher import EpisodeMatcher
+from mediatamer.signals.episode_matcher import EpisodeMatcher
 
 
 class TestMatcher(unittest.TestCase):
@@ -66,9 +65,15 @@ class TestMatcher(unittest.TestCase):
             patch(
                 "mediatamer.signals.technical.TechnicalSignals.from_path"
             ) as mock_media_signals,
-            patch("mediatamer.matcher.extract_subtitle_text") as mock_sub,
-            patch("mediatamer.matcher.extract_credits_text") as mock_credits,
-            patch("mediatamer.matcher.infer_context_from_path") as mock_infer,
+            patch(
+                "mediatamer.signals.episode_matcher.extract_subtitle_text"
+            ) as mock_sub,
+            patch(
+                "mediatamer.signals.episode_matcher.extract_credits_text"
+            ) as mock_credits,
+            patch(
+                "mediatamer.signals.episode_matcher.infer_context_from_path"
+            ) as mock_infer,
         ):
             m = MagicMock()
             m.duration = 45 * 60
@@ -100,8 +105,8 @@ class TestMatcher(unittest.TestCase):
 
     @patch("mediatamer.signals.tmdb.requests.get")
     @patch("mediatamer.signals.technical.TechnicalSignals.from_path")
-    @patch("mediatamer.matcher.extract_subtitle_text")
-    @patch("mediatamer.matcher.extract_credits_text")
+    @patch("mediatamer.signals.episode_matcher.extract_subtitle_text")
+    @patch("mediatamer.signals.episode_matcher.extract_credits_text")
     def test_global_index_matching(
         self, mock_credits, mock_sub, mock_media_signals, mock_get
     ):

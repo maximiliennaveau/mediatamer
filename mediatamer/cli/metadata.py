@@ -55,7 +55,6 @@ def main():
     config = load_config()
     tmdb_key = args.tmdb_api_key or config.get("tmbd-api-key")
 
-    check_ffprobe()
     input_dir = args.input.resolve()
     out_dir = args.output.resolve()
     exts = {e if e.startswith(".") else f".{e}" for e in args.extensions}

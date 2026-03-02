@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Optional, List
 
 from mediatamer.parameters import get_extensions
-
-
 from mediatamer.signals.cache import get_or_create_metadata
 
 

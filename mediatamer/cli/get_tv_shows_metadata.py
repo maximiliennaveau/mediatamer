@@ -6,12 +6,10 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 import requests
 import argcomplete
 
-from mediatamer.matcher import EpisodeMatcher
-from mediatamer.cli.metadata import extract_metadata, find_parent_show_and_season
 from mediatamer.parameters import get_extensions
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.video_metadata import VideoMetadata
@@ -105,7 +103,7 @@ def get_tv_shows_metadata(
 
     for i, f in enumerate(files):
         vmeta = VideoMetadata(f)
-        from mediatamer.signals.video_metadata import extract_all_metadata
+        from mediatamer.extract_metada import extract_all_metadata
 
         extract_all_metadata(vmeta, root_context)
         sig = vmeta.technical
