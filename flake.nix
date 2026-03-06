@@ -31,6 +31,7 @@
           pkgs.mediainfo
           pkgs.handbrake
           pkgs.tesseract
+          pkgs.ollama
           pkgs.python3Packages.argcomplete
           pkgs.python3Packages.requests
           pkgs.python3Packages.pytesseract
@@ -57,6 +58,7 @@
           pkgs.python3Packages.pytest
         ];
         shellHook = ''
+          export OLLAMA_MODELS="/data/videos/models"
           export SUBTITLE_CACHE_DIR="/data/videos/unsorted_video_subtitle_cache"
           eval "$(register-python-argcomplete mediatamer)"
         '';

@@ -1,34 +1,138 @@
 import os
 import json
+import time
 import requests
+import subprocess
 from typing import List, Dict
 
 import ollama
 
 
+def ensure_model_exists(model: str, client: ollama.Client = None, api_url: str = None):
+    """Ensure the model exists locally in Ollama, pull it if not."""
+    # Try via library if client is provided
+    if client:
+        try:
+            resp = client.list()
+            # Handle both ListResponse object and dict (older library versions)
+            models = resp.models if hasattr(resp, "models") else resp.get("models", [])
+
+            for m in models:
+                # Handle both Model object and dict
+                m_name = getattr(m, "model", None) or getattr(m, "name", None)
+                if not m_name and isinstance(m, dict):
+                    m_name = m.get("model") or m.get("name")
+
+                if m_name and (m_name == model or m_name.startswith(f"{model}:")):
+                    return
+
+            print(f"Model '{model}' not found via library. Pulling...")
+            for progress in client.pull(model=model, stream=True):
+                status = (
+                    progress.get("status")
+                    if isinstance(progress, dict)
+                    else getattr(progress, "status", None)
+                )
+                if status:
+                    print(f"Pulling {model}: {status}")
+            return
+        except Exception as e:
+            print(f"Ollama Library Check/Pull Error: {e}")
+
+    # Fallback via Requests API
+    if api_url:
+        try:
+            endpoint = api_url.rstrip("/")
+            resp = requests.get(f"{endpoint}/api/tags", timeout=10)
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                if not any(
+                    m["name"] == model or m["name"].startswith(f"{model}:")
+                    for m in models
+                ):
+                    print(f"Model '{model}' not found via API. Pulling...")
+                    pull_resp = requests.post(
+                        f"{endpoint}/api/pull",
+                        json={"name": model},
+                        stream=True,
+                        timeout=None,
+                    )
+                    for line in pull_resp.iter_lines():
+                        if line:
+                            data = json.loads(line)
+                            status = data.get("status")
+                            if status:
+                                print(f"Pulling {model}: {status}")
+            else:
+                print(f"Failed to check models at {api_url}: {resp.status_code}")
+        except Exception as e:
+            print(f"Ollama API Check/Pull Error: {e}")
+
+
+def ensure_ollama_server_running(api_url: str):
+    """Check if Ollama server is running, and start it if not."""
+    try:
+        # Quick probe to see if server responds
+        requests.get(f"{api_url.rstrip('/')}/api/tags", timeout=1)
+        return
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        pass
+
+    print(f"Ollama server not found at {api_url}. Starting 'ollama serve'...")
+    try:
+        # Start the server in the background.
+        # It will inherit OLLAMA_MODELS from os.environ if set.
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+        # Wait for the server to become ready
+        max_retries = 20
+        for i in range(max_retries):
+            try:
+                requests.get(f"{api_url.rstrip('/')}/api/tags", timeout=1)
+                print("Ollama server is now running.")
+                return
+            except requests.exceptions.RequestException:
+                time.sleep(1)
+        print("Warning: Timed out waiting for Ollama server to start.")
+    except Exception as e:
+        print(f"Error starting Ollama server: {e}")
+
+
 def run_ai(prompt: str) -> str:
     """Run AI analysis using Ollama (library or requests fallback) and return raw string response."""
-    model = os.environ.get("OLLAMA_MODEL", "llama3")
+    model = os.environ.get("OLLAMA_MODEL", "llama3.1")
     api_url = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
 
+    # Ensure server is running
+    ensure_ollama_server_running(api_url)
+
+    # Ensure model exists
+    host = api_url if api_url else os.environ.get("OLLAMA_HOST")
     try:
-        host = api_url if api_url else os.environ.get("OLLAMA_HOST")
         client = ollama.Client(host=host)
+        ensure_model_exists(model, client=client)
         response = client.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            options={"temperature": 0},
+            options={"temperature": 0, "num_ctx": 32768},
         )
         return response["message"]["content"]
     except Exception as e:
         print(f"Ollama Library Error: {e}")
+        # If client creation failed or chat failed, try API fallback
+        ensure_model_exists(model, api_url=api_url)
 
     try:
         payload = {
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_ctx": 32768},
         }
         endpoint = api_url.rstrip("/")
         if not endpoint.endswith("/api/generate"):
@@ -43,58 +147,4 @@ def run_ai(prompt: str) -> str:
         return ""
 
 
-def discriminate_episodes(
-    subtitle_content: str, episodes: List[Dict]
-) -> Dict[int, float]:
-    """
-    Compare subtitles against all candidate episodes at once.
-    Returns a mapping of episode_number -> score (0.0 to 1.0).
-    """
-    if not subtitle_content or not episodes:
-        return {}
-
-    # 1. Prepare candidate overviews
-    candidates_text = ""
-    for ep in episodes:
-        num = ep.get("episode_number", "?")
-        name = ep.get("name", "Unknown")
-        overview = ep.get("overview", "No description available.")
-        candidates_text += f"Candidate {num} ({name}): {overview}\n\n"
-
-    # 2. Build Prompt
-    prompt = f"""You are an expert TV show episode matcher. I will provide you with the full content of extracted subtitles from a video file and a list of candidate episode descriptions.
-Your task is to determine which candidate(s) match the subtitles.
-
-Subtitle Content:
----
-{subtitle_content[:100000]}
----
-
-Candidate Episodes:
----
-{candidates_text}
----
-
-Return a JSON object where keys are the Candidate numbers (as integers) and values are similarity scores between 0.0 and 1.0. 
-Example: {{"1": 0.9, "2": 0.1}}
-Return ONLY the JSON object."""
-
-    # 3. Run AI
-    response = run_ai(prompt)
-    try:
-        # Clean up response in case of markdown blocks
-        clean_response = response.strip()
-        if clean_response.startswith("```json"):
-            clean_response = clean_response[7:-3].strip()
-        elif clean_response.startswith("```"):
-            clean_response = clean_response[3:-3].strip()
-
-        data = json.loads(clean_response)
-        # Convert keys to int and values to float
-        return {int(k): float(v) for k, v in data.items()}
-    except Exception as e:
-        print(f"Discrimination Parse Error: {e}\nResponse: {response}")
-        return {}
-
-
-__all__ = ["run_ai", "discriminate_episodes"]
+__all__ = ["run_ai"]

@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 DEFAULT_CONFIG_LOCATIONS = [
-    Path("/data/videos/secrets/mediatamer-config.yml"),
     Path(__file__).parent.parent / "secrets" / "mediatamer-config.yml",
     Path.home() / ".config" / "mediatamer" / "config.yml",
+    Path("/data/videos/secrets/mediatamer-config.yml"),
 ]
 
 
