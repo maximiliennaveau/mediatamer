@@ -16,12 +16,6 @@ from typing import Any
 from mediatamer.cli.organize import get_argument_parser as get_organize_parser
 from mediatamer.cli.compress import get_agument_parser as get_compress_parser
 from mediatamer.cli.metadata import get_agument_parser as get_metadata_parser
-from mediatamer.cli.get_tv_shows_metadata import (
-    get_argument_parser as get_tv_metadata_parser,
-)
-from mediatamer.cli.cache_metadata import (
-    get_argument_parser as get_cache_metadata_parser,
-)
 from mediatamer.config import load_config
 
 
@@ -63,28 +57,32 @@ def create_parser(config: dict[str, Any] | None = None):
         "metadata", help="Extract MKV metadata to JSON and CSV"
     )
     metadata_parser = get_metadata_parser(metadata_parser)
-
-    # TV Metadata command (New name)
-    tv_parser = subparsers.add_parser("tv-metadata", help="Extract TV Show metadata")
-    tv_parser = get_tv_metadata_parser(tv_parser)
-    if config:
-        tv_parser.set_defaults(
-            tmdb_api_key=config.get("tmbd-api-key"),
-            jellyfin_url=config.get("jellyfin-url"),
-            jellyfin_api_key=config.get("jellyfin-api-key"),
-        )
-
-    # Cache metadata command
-    cache_metadata_parser = subparsers.add_parser(
-        "cache-metadata", help="Bulk cache metadata for a directory"
+    meta_parser = subparsers.add_parser(
+        "meta", help="Extract MKV metadata to JSON and CSV"
     )
-    cache_metadata_parser = get_cache_metadata_parser(cache_metadata_parser)
+    meta_parser = get_metadata_parser(meta_parser)
 
     return parser
 
 
 def main() -> int | None:
-    config = load_config()
+    # 1. Pre-parse for --config to load it before fully creating the parser
+    # This is a bit tricky with subcommands, so we do a two-pass if needed,
+    # or just let the subcommands handle it as they do now.
+    # However, mediatamer top-level also uses load_config().
+
+    # Simple check for -c or --config in sys.argv
+    config_path = None
+    if "-c" in sys.argv:
+        idx = sys.argv.index("-c")
+        if idx + 1 < len(sys.argv):
+            config_path = sys.argv[idx + 1]
+    elif "--config" in sys.argv:
+        idx = sys.argv.index("--config")
+        if idx + 1 < len(sys.argv):
+            config_path = sys.argv[idx + 1]
+
+    config = load_config(config_path)
     parser = create_parser(config)
     args = parser.parse_args()
 
@@ -100,10 +98,6 @@ def main() -> int | None:
         return _call_module_main("mediatamer.cli.compress", sys.argv[2:])
     if cmd in ("metadata", "meta"):
         return _call_module_main("mediatamer.cli.metadata", sys.argv[2:])
-    if cmd in ("dvd-metadata", "tv-metadata"):
-        return _call_module_main("mediatamer.cli.get_tv_shows_metadata", sys.argv[2:])
-    if cmd == "cache-metadata":
-        return _call_module_main("mediatamer.cli.cache_metadata", sys.argv[2:])
 
     parser.print_help()
     return 2

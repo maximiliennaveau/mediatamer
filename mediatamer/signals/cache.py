@@ -7,7 +7,6 @@ from mediatamer.signals.video_metadata import (
     metadata_from_dict,
     metadata_to_dict,
 )
-from mediatamer.extract_metada import extract_all_metadata
 
 CACHE_DIR = Path.home() / ".cache" / "mediatamer" / "metadata"
 
@@ -43,17 +42,3 @@ def save_metadata(metadata: VideoMetadata):
             json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"Error saving cache for {metadata.path.name}: {e}")
-
-
-def get_or_create_metadata(
-    video_path: Path, scan_root: Optional[Path] = None
-) -> VideoMetadata:
-    """Retrieve metadata from cache, or extract and cache it if missing."""
-    meta = load_metadata(video_path)
-    if meta:
-        return meta
-
-    meta = VideoMetadata(path=video_path)
-    extract_all_metadata(meta, scan_root)
-    save_metadata(meta)
-    return meta

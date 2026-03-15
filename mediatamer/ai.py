@@ -3,7 +3,8 @@ import json
 import time
 import requests
 import subprocess
-from typing import List, Dict
+
+from mediatamer.config import load_config
 
 import ollama
 
@@ -69,7 +70,7 @@ def ensure_model_exists(model: str, client: ollama.Client = None, api_url: str =
             print(f"Ollama API Check/Pull Error: {e}")
 
 
-def ensure_ollama_server_running(api_url: str):
+def ensure_ollama_server_running(api_url: str, models_path: str = None):
     """Check if Ollama server is running, and start it if not."""
     try:
         # Quick probe to see if server responds
@@ -79,14 +80,27 @@ def ensure_ollama_server_running(api_url: str):
         pass
 
     print(f"Ollama server not found at {api_url}. Starting 'ollama serve'...")
+
+    # Setup environment for the server
+    env = os.environ.copy()
+    if models_path:
+        print(f"Using models path from config: {models_path}")
+        env["OLLAMA_MODELS"] = models_path
+
+    if env.get("OLLAMA_API_KEY") or env.get("OLLAMA_APP_KEY"):
+        print("Using API/App Key for authentication.")
+        # If OLLAMA_APP_KEY is used in config, also set it for the subprocess env
+        if env.get("OLLAMA_APP_KEY") and not env.get("OLLAMA_API_KEY"):
+            env["OLLAMA_API_KEY"] = env["OLLAMA_APP_KEY"]
+
     try:
         # Start the server in the background.
-        # It will inherit OLLAMA_MODELS from os.environ if set.
         subprocess.Popen(
             ["ollama", "serve"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            env=env,
         )
 
         # Wait for the server to become ready
@@ -105,16 +119,33 @@ def ensure_ollama_server_running(api_url: str):
 
 def run_ai(prompt: str) -> str:
     """Run AI analysis using Ollama (library or requests fallback) and return raw string response."""
-    model = os.environ.get("OLLAMA_MODEL", "llama3.1")
-    api_url = os.environ.get("OLLAMA_API_URL", "http://localhost:11434")
+    # Load configuration
+    config = load_config()
+
+    model = os.environ.get("OLLAMA_MODEL") or config.get("ollama-model", "llama3.1")
+    api_url = os.environ.get("OLLAMA_API_URL") or config.get(
+        "ollama-api-url", "http://localhost:11434"
+    )
+    api_key = (
+        os.environ.get("OLLAMA_API_KEY")
+        or config.get("ollama-app-key")
+        or config.get("ollama-api-key")
+    )
+    models_path = os.environ.get("OLLAMA_MODELS") or config.get("ollama-models-path")
 
     # Ensure server is running
-    ensure_ollama_server_running(api_url)
+    ensure_ollama_server_running(api_url, models_path=models_path)
 
     # Ensure model exists
     host = api_url if api_url else os.environ.get("OLLAMA_HOST")
     try:
-        client = ollama.Client(host=host)
+        # Client handles OLLAMA_API_KEY env var automatically in recent versions,
+        # but we can also pass it in headers for maximum compatibility.
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        client = ollama.Client(host=host, headers=headers)
         ensure_model_exists(model, client=client)
         response = client.chat(
             model=model,
@@ -128,6 +159,10 @@ def run_ai(prompt: str) -> str:
         ensure_model_exists(model, api_url=api_url)
 
     try:
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         payload = {
             "model": model,
             "prompt": prompt,
@@ -138,7 +173,7 @@ def run_ai(prompt: str) -> str:
         if not endpoint.endswith("/api/generate"):
             endpoint = f"{endpoint}/api/generate"
 
-        resp = requests.post(endpoint, json=payload, timeout=120)
+        resp = requests.post(endpoint, json=payload, headers=headers, timeout=120)
         resp.raise_for_status()
         data = resp.json()
         return data.get("response", "")

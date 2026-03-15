@@ -1,11 +1,8 @@
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Tuple
 import subprocess
-
-if TYPE_CHECKING:
-    from mediatamer.signals.video_metadata import VideoMetadata
 
 
 @dataclass
@@ -26,16 +23,17 @@ class TechnicalSignals:
         metadata.technical = signals
         return signals
 
-    def update_video_metadata(self, metadata: "VideoMetadata"):
-        """Populate VideoMetadata with technical signals."""
-        metadata.technical = self
-
     def to_legacy_dict(self) -> Dict[str, Any]:
         """Convert to the dictionary format expected by legacy code."""
         return {
             "duration": self.duration,
+            "duration_minutes": self.duration_minutes,
             "chapters": self.chapters,
             "has_chapters": self.has_chapters,
+            "is_multi_episode": self.is_multi_episode,
+            "estimated_episode_count": self.estimated_episode_count,
+            "suggested_ocr_ranges": self.suggested_ocr_ranges,
+            "encoding_date": self.encoding_date,
             "embedded_title": self.embedded_title,
             "ffprobe": self.ffprobe,
             "mkvmerge": self.mkvmerge,
@@ -210,9 +208,3 @@ class TechnicalSignals:
             return {"error": "mediainfo failed", "stderr": e.stderr}
         except Exception as e:
             return {"error": str(e)}
-
-
-def get_technical_metadata(path: Path) -> Dict[str, Any]:
-    """Return technical metadata extracted with multiple tools (unified)."""
-    signals = TechnicalSignals.from_path(path)
-    return signals.to_legacy_dict()

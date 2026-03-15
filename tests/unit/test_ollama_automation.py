@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch
-from mediatamer.signals.ai import ensure_model_exists, run_ai
+from mediatamer.ai import ensure_model_exists, run_ai
 
 
 class TestOllamaAutomation(unittest.TestCase):

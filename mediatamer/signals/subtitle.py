@@ -1,4 +1,4 @@
-from typing import Optional, Dict, List, Tuple, TYPE_CHECKING
+from typing import Optional, Dict, List, Tuple, Any, TYPE_CHECKING
 import os
 from pathlib import Path
 import subprocess
@@ -7,8 +7,6 @@ from datetime import timedelta
 
 if TYPE_CHECKING:
     from mediatamer.signals.video_metadata import VideoMetadata
-
-from mediatamer.signals.ffprobe import extract_metadata_ffprobe
 
 
 class SRTParser:
@@ -35,7 +33,6 @@ class SRTParser:
     def _parse(self, content: str) -> List[Dict]:
         entries = []
         # Basic SRT regex: index, time range, and text block
-        # Using a more robust regex that handles extra newlines
         pattern = re.compile(
             r"(\d+)\s*\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s*\n(.*?)(?=\n\d+\s*\n\d{2}:\d{2}:\d{2},\d{3} -->|\Z)",
             re.DOTALL,
@@ -70,269 +67,175 @@ class SRTParser:
         return "\n".join(e["text"] for e in filtered)
 
 
-def get_subtitle_segment(
-    path: Path, start_time: Optional[float] = None, end_time: Optional[float] = None
-) -> Optional[str]:
-    """Get text from a specific time segment using cached SRT or targeted OCR."""
-    if not path.exists():
-        return None
+class SubtitleSignals:
+    """Refactored subtitle extraction using existing VideoMetadata."""
 
-    # 1. Try Cache
-    # This now depends on the caller passing a populated metadata object
-    # or the caller using cache.load_metadata(path)
-    pass
+    def __init__(
+        self, metadata: "VideoMetadata", config: Optional[Dict[str, Any]] = None
+    ):
+        self.metadata = metadata
+        self.config = config or {}
+        self.path = metadata.path
 
-    # 2. Try Text Streams
-    srt_content = _extract_text_sub_streams(path)
-    if srt_content:
-        return SRTParser(srt_content).get_range_text(start_time, end_time)
+    def extract(self) -> "VideoMetadata":
+        """
+        Extract subtitles for the entire video and populate the metadata object.
+        Outputs the VideoMetadata object filled with extracted subtitles.
+        """
+        if self.metadata.subtitles:
+            return self.metadata
 
-    # 3. Targeted OCR
-    if start_time is None and end_time is None:
-        # Full content requested but we must OCR; take a larger 10m chunk
-        return extract_pgs_as_text(path, duration_limit=600.0)
-
-    start = start_time or 0.0
-    dur = 60.0  # Default chunk if end not specified
-    if end_time is not None:
-        dur = max(0.0, end_time - start)
-
-    return _ocr_subtitle_ranges(path, [(start, dur)])
-
-
-def _find_subtitle_stream(path: Path, pgs_only: bool = False) -> Optional[Dict]:
-    """Find a suitable subtitle stream index and metadata."""
-    j = extract_metadata_ffprobe(path)
-    streams = j.get("streams", [])
-
-    candidates = []
-    for s in streams:
-        if s.get("codec_type") != "subtitle":
-            continue
-        codec = (s.get("codec_name") or "").lower()
-        is_pgs = codec in ("hdmv_pgs_subtitle", "pgs", "dvd_subtitle")
-        if pgs_only and not is_pgs:
-            continue
-        candidates.append(s)
-
-    if not candidates:
-        return None
-
-    # Sort to prefer non-PGS if multiple available and pgs_only is False
-    if not pgs_only:
-        candidates.sort(
-            key=lambda s: s.get("codec_name", "").lower()
-            in ("hdmv_pgs_subtitle", "pgs", "dvd_subtitle")
-        )
-
-    return candidates[0]
-
-
-def _extract_text_sub_streams(path: Path) -> Optional[str]:
-    """Try to extract a text-based subtitle stream (SRT/ASS/etc) as SRT."""
-    j = extract_metadata_ffprobe(path)
-    for s in j.get("streams", []):
-        if s.get("codec_type") != "subtitle":
-            continue
-        codec = (s.get("codec_name") or "").lower()
-        if codec in ("hdmv_pgs_subtitle", "pgs", "dvd_subtitle"):
-            continue
-
-        idx = s.get("index")
-        try:
-            cmd = [
-                "ffmpeg",
-                "-loglevel",
-                "error",
-                "-i",
-                str(path),
-                "-map",
-                f"0:{idx}",
-                "-c:s",
-                "srt",
-                "-f",
-                "srt",
-                "-",
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            if res.stdout.strip():
-                out = res.stdout.strip()
-                return out
-        except Exception:
-            continue
-    return None
-
-
-def _ocr_subtitle_ranges(
-    path: Path, ranges: List[Tuple[float, float]]
-) -> Optional[str]:
-    """Internal OCR engine for specific ranges."""
-    import shutil
-
-    if not shutil.which("tesseract"):
-        return None
-    try:
-        import pytesseract
-        from PIL import Image
-    except ImportError:
-        return None
-
-    import tempfile
-
-    stream = _find_subtitle_stream(path, pgs_only=True)
-    if not stream:
-        return None
-
-    idx = stream.get("index")
-    codec = stream.get("codec_name", "")
-    width = stream.get("width") or (720 if codec == "dvd_subtitle" else 1920)
-    height = stream.get("height") or (576 if codec == "dvd_subtitle" else 1080)
-
-    text_content = []
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for i, (start, dur) in enumerate(ranges):
-            cmd = [
-                "ffmpeg",
-                "-loglevel",
-                "error",
-                "-ss",
-                str(start),
-                "-i",
-                str(path),
-                "-f",
-                "lavfi",
-                "-i",
-                f"color=size={width}x{height}:rate=24:color=black",
-                "-filter_complex",
-                f"[1:v][0:{idx}]overlay,fps=0.2",
-                "-t",
-                str(dur),
-                "-f",
-                "image2",
-                f"{tmpdir}/range_{i}_%03d.png",
-            ]
-            try:
-                subprocess.run(cmd, check=True, timeout=90)
-            except Exception:
-                continue
-
-        images = sorted([f for f in os.listdir(tmpdir) if f.endswith(".png")])
-        for img_name in images:
-            try:
-                text = pytesseract.image_to_string(
-                    Image.open(os.path.join(tmpdir, img_name))
-                )
-                if text.strip():
-                    text_content.append(text.strip())
-            except Exception:
-                continue
-
-    out = "\n".join(text_content)
-    if out:
-        # We don't save full subtitle_srt here because it's only a fragment.
-        # But we could save it as a specific fragment if we want.
-        pass
-    return out
-
-
-def extract_subtitle_text(
-    path: Path,
-    metadata: "VideoMetadata",
-    prefer_non_pgs: bool = True,
-    duration_limit: float = 600.0,
-) -> Optional[str]:
-    """Extract first available text subtitle stream, or fallback to OCR."""
-    if metadata and metadata.subtitles:
-        return metadata.subtitles
-
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
-
-    # 1. Try text streams
-    out = _extract_text_sub_streams(path)
-    if out:
-        if metadata:
-            metadata.subtitles = out
-        return out
-
-    # 2. Fallback to OCR if requested
-    if prefer_non_pgs:
-        res = extract_pgs_as_text(path, duration_limit=duration_limit)
-        if metadata:
-            metadata.subtitles = res
-        return res
-    return None
-
-
-def get_subtitle_beginning(path: Path, duration: float = 300.0) -> Optional[str]:
-    """Convenience to get the first few minutes of subtitles."""
-    return get_subtitle_segment(path, start_time=0.0, end_time=duration)
-
-
-def get_subtitle_credits(path: Path, duration: float = 300.0) -> Optional[str]:
-    """Convenience to get the last few minutes of subtitles."""
-    j = extract_metadata_ffprobe(path)
-    total_duration = float(j.get("format", {}).get("duration", 0))
-    if total_duration <= 0:
-        return None
-    return get_subtitle_segment(
-        path, start_time=max(0.0, total_duration - duration), end_time=total_duration
-    )
-
-
-def extract_pgs_as_text(path: Path, duration_limit: float = 600.0) -> Optional[str]:
-    """OCR PGS/DVD subtitles."""
-    # This is a wrapper around _ocr_subtitle_ranges but for a single range
-    out = _ocr_subtitle_ranges(path, [(0.0, duration_limit)])
-    return out
-
-
-def extract_credits_text(
-    path: Path,
-    metadata: "VideoMetadata",
-    opening_duration: float = 180.0,
-    closing_duration: float = 180.0,
-    custom_ranges: Optional[List[Tuple[float, float]]] = None,
-) -> Optional[str]:
-    """Extract text from specified ranges using cached SRT or OCR."""
-    if metadata.subtitles:
-        # If we have full subtitles, we can extract credits from them
-        parser = SRTParser(metadata.subtitles)
-        # We'll re-calculate ranges below
-
-    if not path.exists():
-        return None
-
-    # 1. Determine ranges
-    ranges = custom_ranges
-    if not ranges:
-        j = extract_metadata_ffprobe(path)
-        total_duration = float(j.get("format", {}).get("duration", 0))
-        ranges = [
-            (0.0, opening_duration),
-            (max(0.0, total_duration - closing_duration), closing_duration),
-        ]
-
-    # 2. Try to get from existing SRT/Text streams first (fast)
-    srt_content = _extract_text_sub_streams(path)
-    if srt_content:
-        parser = SRTParser(srt_content)
-        results = [parser.get_range_text(r[0], r[0] + r[1]) for r in ranges]
-        out = "\n".join(filter(None, results))
+        # 1. Try text-based subtitle streams (SRT/ASS/etc).
+        out = self._extract_text_sub_streams()
         if out:
-            return out
+            self.metadata.subtitles = out
+            return self.metadata
 
-    # 3. Fallback to OCR
-    out = _ocr_subtitle_ranges(path, ranges)
-    return out
+        # 2. Perform OCR for the entire video.
+        res = self._ocr_subtitle_ranges([(0.0, self.metadata.technical.duration)])
+        if res:
+            self.metadata.subtitles = res
+
+        return self.metadata
+
+    def _get_ffprobe_data(self) -> Dict[str, Any]:
+        """Retrieve ffprobe data from VideoMetadata without re-running tools."""
+        if self.metadata.technical and self.metadata.technical.ffprobe:
+            return self.metadata.technical.ffprobe
+
+        # Fallback to manual extraction ONLY if the metadata is missing technical signals
+        # This shouldn't happen based on the requirement that technical metadata is already present.
+        from mediatamer.signals.technical import TechnicalSignals
+
+        return TechnicalSignals._extract_metadata_ffprobe(self.path)
+
+    def _find_subtitle_stream(self, pgs_only: bool = False) -> Optional[Dict]:
+        """Find a suitable subtitle stream index using existing metadata."""
+        j = self._get_ffprobe_data()
+        streams = j.get("streams", [])
+
+        candidates = []
+        for s in streams:
+            if s.get("codec_type") != "subtitle":
+                continue
+            codec = (s.get("codec_name") or "").lower()
+            is_pgs = codec in ("hdmv_pgs_subtitle", "pgs", "dvd_subtitle")
+            if pgs_only and not is_pgs:
+                continue
+            candidates.append(s)
+
+        if not candidates:
+            return None
+
+        if not pgs_only:
+            # Sort to prefer non-PGS (higher priority)
+            candidates.sort(
+                key=lambda s: s.get("codec_name", "").lower()
+                in ("hdmv_pgs_subtitle", "pgs", "dvd_subtitle")
+            )
+
+        return candidates[0]
+
+    def _extract_text_sub_streams(self) -> Optional[str]:
+        """Try to extract a text-based subtitle stream (SRT/ASS/etc) as SRT string."""
+        j = self._get_ffprobe_data()
+        for s in j.get("streams", []):
+            if s.get("codec_type") != "subtitle":
+                continue
+            codec = (s.get("codec_name") or "").lower()
+            if codec in ("hdmv_pgs_subtitle", "pgs", "dvd_subtitle"):
+                continue
+
+            idx = s.get("index")
+            try:
+                cmd = [
+                    "ffmpeg",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(self.path),
+                    "-map",
+                    f"0:{idx}",
+                    "-c:s",
+                    "srt",
+                    "-f",
+                    "srt",
+                    "-",
+                ]
+                res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                if res.stdout.strip():
+                    return res.stdout.strip()
+            except Exception:
+                continue
+        return None
+
+    def _ocr_subtitle_ranges(self, ranges: List[Tuple[float, float]]) -> Optional[str]:
+        """Internal OCR engine for specific ranges."""
+        import shutil
+
+        if not shutil.which("tesseract"):
+            return None
+        try:
+            import pytesseract
+            from PIL import Image
+        except ImportError:
+            return None
+
+        import tempfile
+
+        stream = self._find_subtitle_stream(pgs_only=True)
+        if not stream:
+            return None
+
+        idx = stream.get("index")
+        codec = stream.get("codec_name", "")
+        # DVD subtitles are often 720x576, PGS are usually 1920x1080
+        width = stream.get("width") or (720 if codec == "dvd_subtitle" else 1920)
+        height = stream.get("height") or (576 if codec == "dvd_subtitle" else 1080)
+
+        text_content = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for i, (start, dur) in enumerate(ranges):
+                cmd = [
+                    "ffmpeg",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    str(start),
+                    "-i",
+                    str(self.path),
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    f"color=size={width}x{height}:rate=24:color=black",
+                    "-filter_complex",
+                    f"[1:v][0:{idx}]overlay,fps=0.2",
+                    "-t",
+                    str(dur),
+                    "-f",
+                    "image2",
+                    f"{tmpdir}/range_{i}_%03d.png",
+                ]
+                try:
+                    subprocess.run(cmd, check=True, timeout=90)
+                except Exception:
+                    continue
+
+            images = sorted([f for f in os.listdir(tmpdir) if f.endswith(".png")])
+            for img_name in images:
+                try:
+                    text = pytesseract.image_to_string(
+                        Image.open(os.path.join(tmpdir, img_name))
+                    )
+                    if text.strip():
+                        text_content.append(text.strip())
+                except Exception:
+                    continue
+
+        return "\n".join(text_content)
 
 
 __all__ = [
-    "extract_subtitle_text",
-    "extract_pgs_as_text",
-    "extract_credits_text",
-    "get_subtitle_segment",
-    "get_subtitle_beginning",
-    "get_subtitle_credits",
+    "SubtitleSignals",
     "SRTParser",
 ]

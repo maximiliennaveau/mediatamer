@@ -36,9 +36,12 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
     guessit = data.get("guessit", {})
     subtitles = data.get("subtitles")
     ai_match = data.get("ai_match", {})
+    technical = data.get("technical", {})
 
-    # Note: technical is currently re-mapped to dict on save.
-    # If we need full reconstructed objects, we'd need TechnicalSignals.from_dict
     return VideoMetadata(
-        path=path, guessit=guessit, subtitles=subtitles, ai_match=ai_match
+        path=path,
+        guessit=guessit,
+        subtitles=subtitles,
+        ai_match=ai_match,
+        technical=TechnicalSignals.from_dict(technical),
     )

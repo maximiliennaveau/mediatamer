@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 from shutil import move, copy2
 import argcomplete
+from mediatamer.cli.argparse_utils import add_common_arguments
 
 from mediatamer.parameters import get_extensions
 from mediatamer.utils import sanitize_filename, zero_pad
@@ -44,6 +45,7 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
     parser.add_argument(
         "--language", type=str, default="fr-FR", help="Language for metadata lookup"
     )
+    parser = add_common_arguments(parser)
     return parser
 
 

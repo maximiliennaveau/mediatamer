@@ -1,11 +1,11 @@
 import guessit
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional, TYPE_CHECKING
-from mediatamer.utils import normalize_show_name
+from typing import Dict, Any, Optional
 
-if TYPE_CHECKING:
-    from mediatamer.signals.video_metadata import VideoMetadata
+from mediatamer.ai import run_ai
+from mediatamer.utils import normalize_show_name
+from mediatamer.signals.video_metadata import VideoMetadata
 
 
 def _to_int(val: Any) -> Optional[int]:
@@ -20,9 +20,7 @@ def _to_int(val: Any) -> Optional[int]:
         return None
 
 
-def infer_context_from_path(
-    file_path: Path, metadata: "VideoMetadata", root_path: Optional[Path] = None
-) -> Dict[str, Any]:
+def infer_context_from_path(metadata: VideoMetadata) -> Dict[str, Any]:
     """Robustly infer show metadata by walking up the directory tree and parsing the filename.
 
     Returns a dictionary with:
@@ -32,7 +30,7 @@ def infer_context_from_path(
         - dvd: Optional[int] (disc number)
         - part: Optional[int] (part number)
         - title: Optional[str] (episode title)
-        - confidence: float
+        - guessit: Dict[str, Any] (raw guessit result)
     """
     out = {
         "show": None,
@@ -41,10 +39,11 @@ def infer_context_from_path(
         "dvd": None,
         "part": None,
         "title": None,
-        "confidence": 0.0,
+        "guessit": {},
     }
 
-    # 1. Filename-specific parsing (Highest precision for Episode/Title/Part)
+    # 1. Filename-specific parsing.
+    file_path = metadata.path
     gi_file = guessit.guessit(file_path.name)
 
     out["episode"] = _to_int(gi_file.get("episode") or gi_file.get("episode_number"))
@@ -53,19 +52,16 @@ def infer_context_from_path(
     out["part"] = _to_int(gi_file.get("part"))
     out["title"] = gi_file.get("episode_title")
     out["confidence"] = float(gi_file.get("confidence", 0.0))
+    out["guessit"] = gi_file
 
     # 2. Path-walking for Context (Show, Season, DVD)
     curr = file_path.resolve().parent
-    root = root_path.resolve() if root_path else None
-    # Don't walk above root if provided, otherwise stop at /
-    limit = root.parent if root else Path("/")
+    limit = Path("/")
 
     path_parts = []
     tmp = curr
     while tmp != limit and tmp != tmp.parent:
         path_parts.append(tmp)
-        if root and tmp == root:
-            break
         tmp = tmp.parent
 
     # Search from deepest (subfolder) to shallowest (show folder)
@@ -101,7 +97,28 @@ def infer_context_from_path(
     if f_series:
         out["show"] = normalize_show_name(f_series)
 
-    if metadata:
-        metadata.guessit = out
+    run_ai(f"""
+        You are a video metadata parser.
+        You are given a video file path and you need to extract the show name, season, episode, dvd, part and title if possible.
+        Find below the reusult of a pre-analysis from the sofware guessit:
+        {gi_file}
 
+        Here is the path to analyse:
+        {file_path}
+
+        The output format must be a json object with the following keys:
+        - show: Optional[str]
+        - season: Optional[int]
+        - episode: Optional[int]
+        - dvd: Optional[int]
+        - part: Optional[int]
+        - title: Optional[str]
+        - confidence: Optional[float]
+        - guessit: Dict[str, Any]
+
+        You can use the guessit output but it is not always correct, so use your best judgement.
+        Return only the json object.
+    """)
+
+    metadata.guessit = out
     return out

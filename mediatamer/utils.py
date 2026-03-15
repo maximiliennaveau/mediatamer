@@ -1,7 +1,10 @@
 """MediaTamer utility functions."""
 
-import re
+from pathlib import Path
 from langdetect import detect
+import re
+
+from mediatamer.parameters import get_extensions
 
 
 def sanitize_filename(name: str) -> str:
@@ -49,3 +52,14 @@ def detect_language(text: str) -> str:
     if not text or len(text.strip()) < 50:
         return "en"
     return detect(text)
+
+
+def extract_files_to_process(input_dir: Path):
+    exts = {e if e.startswith(".") else f".{e}" for e in get_extensions()}
+    files = sorted(
+        [p for p in input_dir.rglob("*") if p.suffix.lower() in exts and p.is_file()]
+    )
+    if not files:
+        print("No files found in", input_dir)
+        return None
+    return files

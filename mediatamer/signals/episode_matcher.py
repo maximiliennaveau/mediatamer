@@ -6,7 +6,7 @@ from mediatamer.utils import detect_language
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, lang_to_tmdb_locale
 from mediatamer.signals.scoring import score_episode_match
-from mediatamer.signals.ai import discriminate_episodes
+from mediatamer.ai import discriminate_episodes
 
 
 class EpisodeMatcher:

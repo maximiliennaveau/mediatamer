@@ -10,6 +10,7 @@ try:
     import argcomplete
 except ImportError:
     argcomplete = None
+from mediatamer.cli.argparse_utils import add_common_arguments
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".ts", ".mpg", ".mpeg", ".flv"}
 
@@ -43,7 +44,7 @@ def find_embedded_sub(infile: Path) -> Optional[str]:
                 candidates.append(line)
         # Prefer English
         english_subs = [
-            l for l in candidates if re.search(r"\b(eng|english)\b", l, re.I)
+            line for line in candidates if re.search(r"\b(eng|english)\b", line, re.I)
         ]
         if english_subs:
             match = re.search(r"track\s*(\d+)", english_subs[0], re.I)
@@ -51,7 +52,7 @@ def find_embedded_sub(infile: Path) -> Optional[str]:
                 return match.group(1)
         # Then French
         french_subs = [
-            l for l in candidates if re.search(r"\b(fra|fre|french|vost)\b", l, re.I)
+            line for line in candidates if re.search(r"\b(fra|fre|french|vost)\b", line, re.I)
         ]
         if french_subs:
             match = re.search(r"track\s*(\d+)", french_subs[0], re.I)
@@ -116,6 +117,7 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
         "--no-embedded", action="store_true", help="Do not include embedded subtitles"
     )
     parser.add_argument("--exts", nargs="*", help="Video extensions to process")
+    parser = add_common_arguments(parser)
     argcomplete.autocomplete(parser)
     return parser
 

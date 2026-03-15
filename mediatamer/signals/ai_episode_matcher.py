@@ -1,16 +1,17 @@
 import json
-from typing import List, Dict, Any
+from typing import List, Dict
+from mediatamer.config import load_config
 from mediatamer.signals.tmdb import fetch_tmdb_episodes
-from mediatamer.signals.ai import run_ai
+from mediatamer.ai import run_ai
 from mediatamer.signals.video_metadata import VideoMetadata
 
 
-def match_episode(meta: VideoMetadata, config: Dict[str, Any]) -> None:
+def match_episode(meta: VideoMetadata) -> None:
     """
     Gathers all possible signals from metadata and queries the AI.
     Fills in meta.ai_match.
     """
-    matcher = AIEpisodeMatcher(config)
+    matcher = AIEpisodeMatcher()
     matcher.match(meta)
 
 
@@ -20,8 +21,9 @@ class AIEpisodeMatcher:
     and uses AI to determine the best episode match.
     """
 
-    def __init__(self, config: Dict[str, Any]):
-        self.tmdb_api_key = config.get("tmbd-api-key")
+    def __init__(self):
+        self.config = load_config()
+        self.tmdb_api_key = self.config.get("tmbd-api-key")
 
     def match(self, meta: VideoMetadata) -> None:
         """
@@ -143,7 +145,7 @@ class AIEpisodeMatcher:
 - Filename Metadata: {json.dumps(video_metadata, indent=2)}
 - Subtitle Content (First 100k chars):
 ---
-{subtitles[:100000]}
+{subtitles}
 ---
 
 ### TMDB CANDIDATE EPISODES

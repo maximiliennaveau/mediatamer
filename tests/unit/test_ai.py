@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from mediatamer.signals.ai import run_ai
+from mediatamer.ai import run_ai
 
 
 class TestAIEpisodeMatcher(unittest.TestCase):
