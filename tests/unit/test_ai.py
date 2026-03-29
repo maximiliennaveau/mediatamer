@@ -1,13 +1,13 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
-from mediatamer.ai import run_ai
-
+from mediatamer.signals.ai_episode_matcher import AIEpisodeMatcher
+from mediatamer.signals.video_metadata import VideoMetadata
 
 class TestAIEpisodeMatcher(unittest.TestCase):
     def setUp(self):
-        self.config = {"tmbd-api-key": "test"}
-        self.matcher = AIEpisodeMatcher(self.config)
+        self.matcher = AIEpisodeMatcher()
 
     @patch("mediatamer.signals.ai_episode_matcher.run_ai")
     @patch("mediatamer.signals.tmdb.fetch_tmdb_episodes")
@@ -17,12 +17,12 @@ class TestAIEpisodeMatcher(unittest.TestCase):
         mock_run_ai.return_value = "{}"
 
         # Create a dummy VideoMetadata object
-        meta = MagicMock()
-        meta.path = Path("test.mkv")
+        p = Path("test.mkv")
+        meta = VideoMetadata(path=p)
         meta.guessit = {"show": "Test Show", "season": 1}
         meta.technical = MagicMock()
-        meta.technical.to_legacy_dict.return_value = {}
-        meta.subtitles = ""
+        meta.technical.to_legacy_dict.return_value = {"duration": 1200}
+        meta.subtitles = "Some subtitle text"
 
         self.matcher.match(meta)
 

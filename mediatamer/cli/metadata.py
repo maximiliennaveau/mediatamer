@@ -27,7 +27,10 @@ def main():
     config = load_config(args.config)
 
     input_dir = args.input.resolve()
-    out_dir = input_dir
+    if input_dir.is_file():
+        out_dir = input_dir.parent
+    else:
+        out_dir = input_dir
 
     files = extract_files_to_process(input_dir)
     metadata_list = {}
@@ -41,13 +44,16 @@ def main():
             continue
 
         print(f"Extracted metadata for {f}:")
-        print(f"Title: {meta.show}")
-        print(f"Season: {meta.season}")
-        print(f"Episode: {meta.episode}")
+        print(f"Show: {meta.ai_match.get('show')}")
+        print(f"Season: {meta.ai_match.get('season')}")
+        print(f"Episode: {meta.ai_match.get('episode')}")
+        print(f"Title: {meta.ai_match.get('title')}")
+        print(f"Type: {meta.ai_match.get('type')}")
 
-    print(f"Metadata file written to {out_dir / 'metadata.json'}.")
-    with open(out_dir / "metadata.json", "w", encoding="utf-8") as f:
-        json.dump(metadata_list, f, indent=2, ensure_ascii=False)
+        output_file = out_dir / ("metadata-" + f.name + ".json")
+        print(f"Metadata file written to {output_file}.")
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(metadata_to_dict(meta), f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

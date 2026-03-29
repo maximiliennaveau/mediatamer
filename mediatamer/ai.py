@@ -117,8 +117,11 @@ def ensure_ollama_server_running(api_url: str, models_path: str = None):
         print(f"Error starting Ollama server: {e}")
 
 
-def run_ai(prompt: str) -> str:
-    """Run AI analysis using Ollama (library or requests fallback) and return raw string response."""
+def run_ai(prompt: str, json_mode: bool = False) -> str:
+    """Run AI analysis using Ollama (library or requests fallback) and return raw string response.
+
+    If json_mode is True, it sets the format to 'json' for Ollama.
+    """
     # Load configuration
     config = load_config()
 
@@ -150,6 +153,7 @@ def run_ai(prompt: str) -> str:
         response = client.chat(
             model=model,
             messages=[{"role": "user", "content": prompt}],
+            format="json" if json_mode else None,
             options={"temperature": 0, "num_ctx": 32768},
         )
         return response["message"]["content"]
@@ -167,6 +171,7 @@ def run_ai(prompt: str) -> str:
             "model": model,
             "prompt": prompt,
             "stream": False,
+            "format": "json" if json_mode else None,
             "options": {"temperature": 0, "num_ctx": 32768},
         }
         endpoint = api_url.rstrip("/")

@@ -55,6 +55,9 @@ def detect_language(text: str) -> str:
 
 
 def extract_files_to_process(input_dir: Path):
+    if input_dir.is_file():
+        assert input_dir.suffix.lower() in get_extensions()
+        return [input_dir]
     exts = {e if e.startswith(".") else f".{e}" for e in get_extensions()}
     files = sorted(
         [p for p in input_dir.rglob("*") if p.suffix.lower() in exts and p.is_file()]
@@ -62,4 +65,21 @@ def extract_files_to_process(input_dir: Path):
     if not files:
         print("No files found in", input_dir)
         return None
+
+    # File size filtering logic
+    from mediatamer.config import load_config
+
+    config = load_config()
+    threshold = config.get("batch-size-threshold")
+    if threshold:
+        max_size = max((f.stat().st_size for f in files), default=0)
+        if max_size > 0:
+            limit = max_size * float(threshold)
+            original_count = len(files)
+            files = [f for f in files if f.stat().st_size >= limit]
+            if len(files) < original_count:
+                print(
+                    f"Filtered out {original_count - len(files)} files based on size threshold ({threshold})"
+                )
+
     return files

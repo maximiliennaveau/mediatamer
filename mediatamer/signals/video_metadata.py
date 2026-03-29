@@ -15,6 +15,8 @@ class VideoMetadata:
     path: Path
     technical: Optional[TechnicalSignals] = None
     guessit: Dict[str, Any] = field(default_factory=dict)
+    heuristics: Dict[str, Any] = field(default_factory=dict)
+    ai_guess: Dict[str, Any] = field(default_factory=dict)
     subtitles: Optional[str] = None
     ai_match: Dict[str, Any] = field(default_factory=dict)
 
@@ -25,6 +27,8 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
         "path": str(metadata.path),
         "technical": metadata.technical.to_legacy_dict() if metadata.technical else {},
         "guessit": metadata.guessit,
+        "heuristics": metadata.heuristics,
+        "ai_guess": metadata.ai_guess,
         "subtitles": metadata.subtitles,
         "ai_match": metadata.ai_match,
     }
@@ -34,6 +38,8 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
     """Reconstruct VideoMetadata from a dictionary."""
     path = Path(data["path"])
     guessit = data.get("guessit", {})
+    heuristics = data.get("heuristics", {})
+    ai_guess = data.get("ai_guess", {})
     subtitles = data.get("subtitles")
     ai_match = data.get("ai_match", {})
     technical = data.get("technical", {})
@@ -41,6 +47,8 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
     return VideoMetadata(
         path=path,
         guessit=guessit,
+        heuristics=heuristics,
+        ai_guess=ai_guess,
         subtitles=subtitles,
         ai_match=ai_match,
         technical=TechnicalSignals.from_dict(technical),

@@ -9,7 +9,10 @@
     { self, nixpkgs }:
     let
       system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      pkgs = import nixpkgs { 
+        inherit system; 
+        config = { allowUnfree = true; };
+      };
     in
     {
 
@@ -31,7 +34,7 @@
           pkgs.mediainfo
           pkgs.handbrake
           pkgs.tesseract
-          pkgs.ollama
+          (pkgs.ollama.override { acceleration = "cuda"; })
           pkgs.python3Packages.argcomplete
           pkgs.python3Packages.requests
           pkgs.python3Packages.pytesseract

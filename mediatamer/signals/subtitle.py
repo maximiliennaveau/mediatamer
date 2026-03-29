@@ -91,8 +91,14 @@ class SubtitleSignals:
             self.metadata.subtitles = out
             return self.metadata
 
-        # 2. Perform OCR for the entire video.
-        res = self._ocr_subtitle_ranges([(0.0, self.metadata.technical.duration)])
+        # 2. Perform OCR for the video (limited by config if present).
+        scan_duration = self.config.get("subtitle-scan-duration")
+        if scan_duration and scan_duration >= 0:
+            duration = min(float(scan_duration) * 60, self.metadata.technical.duration)
+        else:
+            duration = self.metadata.technical.duration
+
+        res = self._ocr_subtitle_ranges([(0.0, duration)])
         if res:
             self.metadata.subtitles = res
 
@@ -158,10 +164,12 @@ class SubtitleSignals:
                     f"0:{idx}",
                     "-c:s",
                     "srt",
-                    "-f",
-                    "srt",
-                    "-",
                 ]
+                scan_duration = self.config.get("subtitle-scan-duration")
+                if scan_duration:
+                    cmd.extend(["-t", str(float(scan_duration) * 60)])
+                cmd.extend(["-f", "srt", "-"])
+
                 res = subprocess.run(cmd, capture_output=True, text=True, check=True)
                 if res.stdout.strip():
                     return res.stdout.strip()
@@ -233,6 +241,11 @@ class SubtitleSignals:
                     continue
 
         return "\n".join(text_content)
+
+    def _filter_ocr_text(self, text: str) -> str:
+        """Filter out noise from OCR text."""
+        # TODO implement
+        pass
 
 
 __all__ = [

@@ -5,7 +5,7 @@ from mediatamer.signals.technical import TechnicalSignals
 from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.subtitle import SubtitleSignals
-from mediatamer.ai_episode_matcher import match_episode
+from mediatamer.signals.ai_episode_matcher import match_episode
 
 
 def extract_all_metadata(
@@ -20,18 +20,23 @@ def extract_all_metadata(
             return meta
 
     # 1. Technical
+    print("Extracting technical metadata...")
     TechnicalSignals.from_metadata(metadata)
 
     # 2. GuessIt
+    print("Extracting guessit metadata...")
     infer_context_from_path(metadata)
 
     # 3. Subtitles
+    print("Extracting subtitle metadata...")
     SubtitleSignals(metadata, config).extract()
 
     # 4. AI Episode Matcher
+    print("Extracting AI episode matcher metadata...")
     match_episode(metadata)
 
     # Dump the found metada
+    print("Saving metadata...")
     save_metadata(metadata)
 
     return metadata
