@@ -104,7 +104,7 @@ def check_opensubtitles(config: dict) -> bool:
 
         # Call the internal fetch directly using a dummy hash
         try:
-            result = signal._fetch_metadata("1234567890abcdef")
+            _ = signal._fetch_metadata("1234567890abcdef")
             print_result(
                 "OpenSubtitles", True, "Successfully connected to OpenSubtitles API."
             )
@@ -135,13 +135,13 @@ def check_ollama(config: dict) -> bool:
         # Verify that the model path is correct using ollama cli
         res = run_ai("Return exactly 'true' and nothing else.", False)
         if "true" in res.lower() or res == "true":
-            print_result(
-                "Ollama AI", True, "Successfully connected to Ollama API."
-            )
+            print_result("Ollama AI", True, "Successfully connected to Ollama API.")
             return True
         else:
             print_result(
-                f"Ollama AI ({res!r})", False, "Failed to connect to Ollama AI. Incorrect response."
+                f"Ollama AI ({res!r})",
+                False,
+                "Failed to connect to Ollama AI. Incorrect response.",
             )
             return False
 
