@@ -21,42 +21,16 @@ class AIVideoMatcher:
 
     def match(self, meta: VideoMetadata) -> None:
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
-
-        guess_heuristic = meta.heuristics
-        guess_guessit = meta.guessit
         tech_data = meta.technical.to_legacy_dict() if meta.technical else {}
         sub_text = meta.subtitles or ""
 
-        if not guess_heuristic or not guess_guessit or not tech_data or not sub_text:
-            print("[AI Episode Matcher] Missing required signals. Skipping.")
-            return
-
+        guess = {
+            "guessit": meta.guessit,
+            "heuristics": meta.heuristics,
+        }
         search_history = []
         max_iterations = 4
         iteration = 0
-
-        # Provide an initial query based on heuristics so the AI doesn't have to waste iteration 1
-        # doing what we already know. We'll simulate that we already ran a query.
-        initial_show_guess = [
-            guess_heuristic.get("show"),
-            guess_guessit.get("show"),
-        ]
-        initial_show_guess = [show for show in initial_show_guess if show]
-
-        initial_season_guess = [
-            guess_heuristic.get("season"),
-            guess_guessit.get("season"),
-        ]
-        initial_season_guess = [season for season in initial_season_guess if season]
-
-        if initial_show_name and initial_season is not None:
-            print(
-                f"[AI Episode Matcher] Bootstrapping with heuristic search: {initial_show_name} S{initial_season}"
-            )
-            history_entry = self._execute_search_queries(
-                [{"show": initial_show_name, "season": initial_season}]
-            )
-            search_history.extend(history_entry)
 
         while iteration < max_iterations:
             iteration += 1

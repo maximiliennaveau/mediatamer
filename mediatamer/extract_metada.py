@@ -5,7 +5,8 @@ from mediatamer.signals.technical import TechnicalSignals
 from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.subtitle import SubtitleSignals
-from mediatamer.signals.ai_episode_matcher import match_episode
+from mediatamer.signals.opensubtitles import OpenSubtitleSignals
+from mediatamer.signals.ai_video_matcher import match_episode
 
 
 def extract_all_metadata(
@@ -26,6 +27,13 @@ def extract_all_metadata(
     # 2. GuessIt
     print("Extracting guessit metadata...")
     infer_context_from_path(metadata)
+
+    # 2.5 OpenSubtitles
+    print("Extracting opensubtitles metadata...")
+    try:
+        OpenSubtitleSignals(metadata, config).extract()
+    except Exception as e:
+        print(f"Failed to extract OpenSubtitles metadata: {e}")
 
     # 3. Subtitles
     print("Extracting subtitle metadata...")
