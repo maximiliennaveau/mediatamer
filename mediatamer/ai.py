@@ -70,7 +70,9 @@ def ensure_model_exists(model: str, client: ollama.Client = None, api_url: str =
             print(f"Ollama API Check/Pull Error: {e}")
 
 
-def ensure_ollama_server_running(api_url: str, models_path: str = None):
+def ensure_ollama_server_running(
+    api_url: str, models_path: str = None, api_key: str = None
+):
     """Check if Ollama server is running, and start it if not."""
     try:
         # Quick probe to see if server responds
@@ -81,17 +83,19 @@ def ensure_ollama_server_running(api_url: str, models_path: str = None):
 
     print(f"Ollama server not found at {api_url}. Starting 'ollama serve'...")
 
+    if not models_path:
+        raise ValueError("Ollama models path not found in config.")
+    if not api_key:
+        raise ValueError("Ollama app key not found in config.")
+
     # Setup environment for the server
     env = os.environ.copy()
-    if models_path:
-        print(f"Using models path from config: {models_path}")
-        env["OLLAMA_MODELS"] = models_path
+    print(f"Using models path from config: {models_path}")
+    env["OLLAMA_MODELS"] = models_path
 
-    if env.get("OLLAMA_API_KEY") or env.get("OLLAMA_APP_KEY"):
-        print("Using API/App Key for authentication.")
-        # If OLLAMA_APP_KEY is used in config, also set it for the subprocess env
-        if env.get("OLLAMA_APP_KEY") and not env.get("OLLAMA_API_KEY"):
-            env["OLLAMA_API_KEY"] = env["OLLAMA_APP_KEY"]
+    print("Using API/App Key for authentication.")
+    # If OLLAMA_APP_KEY is used in config, also set it for the subprocess env
+    env["OLLAMA_API_KEY"] = api_key
 
     try:
         # Start the server in the background.
@@ -125,19 +129,15 @@ def run_ai(prompt: str, json_mode: bool = False) -> str:
     # Load configuration
     config = load_config()
 
-    model = os.environ.get("OLLAMA_MODEL") or config.get("ollama-model", "llama3.1")
-    api_url = os.environ.get("OLLAMA_API_URL") or config.get(
-        "ollama-api-url", "http://localhost:11434"
-    )
-    api_key = (
-        os.environ.get("OLLAMA_API_KEY")
-        or config.get("ollama-app-key")
-        or config.get("ollama-api-key")
-    )
-    models_path = os.environ.get("OLLAMA_MODELS") or config.get("ollama-models-path")
+    model = config.get("ollama-model")
+    api_url = config.get("ollama-api-url")
+    api_key = config.get("ollama-api-key")
+    models_path = config.get("ollama-models-path")
 
     # Ensure server is running
-    ensure_ollama_server_running(api_url, models_path=models_path)
+    ensure_ollama_server_running(
+        api_url=api_url, models_path=models_path, api_key=api_key
+    )
 
     # Ensure model exists
     host = api_url if api_url else os.environ.get("OLLAMA_HOST")

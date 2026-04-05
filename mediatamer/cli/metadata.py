@@ -2,11 +2,10 @@
 
 import argparse
 from pathlib import Path
-import json
 
 from mediatamer.config import load_config
 from mediatamer.extract_metada import extract_all_metadata
-from mediatamer.signals.video_metadata import VideoMetadata, metadata_to_dict
+from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.utils import extract_files_to_process
 from mediatamer.cli.argparse_utils import add_common_arguments
 
@@ -27,10 +26,6 @@ def main():
     config = load_config(args.config)
 
     input_dir = args.input.resolve()
-    if input_dir.is_file():
-        out_dir = input_dir.parent
-    else:
-        out_dir = input_dir
 
     files = extract_files_to_process(input_dir)
     metadata_list = {}
@@ -49,11 +44,6 @@ def main():
         print(f"Episode: {meta.ai_match.get('episode')}")
         print(f"Title: {meta.ai_match.get('title')}")
         print(f"Type: {meta.ai_match.get('type')}")
-
-        output_file = out_dir / ("metadata-" + f.name + ".json")
-        print(f"Metadata file written to {output_file}.")
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(metadata_to_dict(meta), f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

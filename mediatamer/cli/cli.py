@@ -16,6 +16,7 @@ from typing import Any
 from mediatamer.cli.organize import get_argument_parser as get_organize_parser
 from mediatamer.cli.compress import get_agument_parser as get_compress_parser
 from mediatamer.cli.metadata import get_agument_parser as get_metadata_parser
+from mediatamer.cli.validate import get_validate_parser
 from mediatamer.config import load_config
 
 
@@ -62,6 +63,12 @@ def create_parser(config: dict[str, Any] | None = None):
     )
     meta_parser = get_metadata_parser(meta_parser)
 
+    # Validate command
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validate connections to online tools"
+    )
+    validate_parser = get_validate_parser(validate_parser)
+
     return parser
 
 
@@ -98,6 +105,8 @@ def main() -> int | None:
         return _call_module_main("mediatamer.cli.compress", sys.argv[2:])
     if cmd in ("metadata", "meta"):
         return _call_module_main("mediatamer.cli.metadata", sys.argv[2:])
+    if cmd == "validate":
+        return _call_module_main("mediatamer.cli.validate", sys.argv[2:])
 
     parser.print_help()
     return 2
