@@ -30,8 +30,6 @@
         ];
         propagatedBuildInputs = [
           pkgs.ffmpeg
-          pkgs.mkvtoolnix
-          pkgs.mediainfo
           pkgs.handbrake
           pkgs.tesseract
           (pkgs.ollama.override { acceleration = "cuda"; })

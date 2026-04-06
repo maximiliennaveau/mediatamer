@@ -123,14 +123,9 @@ def check_opensubtitles(config: dict) -> bool:
 
 
 def check_ollama(config: dict) -> bool:
-    model = config.get("ollama-model")
-    api_url = config.get("ollama-api-url")
-    api_key = config.get("ollama-api-key")
-    models_path = config.get("ollama-models-path")
-
     try:
         # We use the internal AI signal mechanism to ensure server is running
-        ensure_ollama_server_running(api_url, models_path, api_key)
+        ensure_ollama_server_running(config)
 
         # Verify that the model path is correct using ollama cli
         res = run_ai("Return exactly 'true' and nothing else.", False)

@@ -70,10 +70,11 @@ def ensure_model_exists(model: str, client: ollama.Client = None, api_url: str =
             print(f"Ollama API Check/Pull Error: {e}")
 
 
-def ensure_ollama_server_running(
-    api_url: str, models_path: str = None, api_key: str = None
-):
+def ensure_ollama_server_running(config: dict):
     """Check if Ollama server is running, and start it if not."""
+    api_url = config.get("ollama-api-url")
+    api_key = config.get("ollama-api-key")
+    models_path = config.get("ollama-models-path")
     try:
         # Quick probe to see if server responds
         requests.get(f"{api_url.rstrip('/')}/api/tags", timeout=1)
@@ -132,12 +133,9 @@ def run_ai(prompt: str, json_mode: bool = False) -> str:
     model = config.get("ollama-model")
     api_url = config.get("ollama-api-url")
     api_key = config.get("ollama-api-key")
-    models_path = config.get("ollama-models-path")
 
     # Ensure server is running
-    ensure_ollama_server_running(
-        api_url=api_url, models_path=models_path, api_key=api_key
-    )
+    ensure_ollama_server_running(config)
 
     # Ensure model exists
     host = api_url if api_url else os.environ.get("OLLAMA_HOST")

@@ -26,7 +26,7 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
     """Convert VideoMetadata to a serializable dictionary."""
     return {
         "path": str(metadata.path),
-        "technical": metadata.technical.to_legacy_dict() if metadata.technical else {},
+        "technical": metadata.technical.to_dict() if metadata.technical else {},
         "guessit": metadata.guessit,
         "heuristics": metadata.heuristics,
         "ai_guess": metadata.ai_guess,
@@ -55,5 +55,5 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
         subtitles=subtitles,
         ai_match=ai_match,
         opensubtitles=opensubtitles,
-        technical=TechnicalSignals.from_dict(technical),
+        technical=TechnicalSignals.from_dict(technical) if technical else None,
     )

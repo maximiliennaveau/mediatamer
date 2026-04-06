@@ -21,7 +21,7 @@ class AIVideoMatcher:
 
     def match(self, meta: VideoMetadata) -> None:
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
-        tech_data = meta.technical.to_legacy_dict() if meta.technical else {}
+        tech_data = meta.technical.to_dict() if meta.technical else {}
         sub_text = meta.subtitles or ""
 
         guess = {
@@ -127,6 +127,7 @@ class AIVideoMatcher:
                     break
 
                 print(f"  -> Executing {len(queries)} queries...")
+                print(f"  -> Queries: {queries}")
                 history_entry = self._execute_search_queries(queries)
                 search_history.extend(history_entry)
 
@@ -142,7 +143,7 @@ class AIVideoMatcher:
     def initial_guess(self, meta: VideoMetadata) -> Dict:
         guess_heuristic = meta.heuristics
         guess_guessit = meta.guessit
-        tech_data = meta.technical.to_legacy_dict() if meta.technical else {}
+        tech_data = meta.technical.to_dict() if meta.technical else {}
         sub_text = meta.subtitles or ""
 
         if not guess_heuristic or not guess_guessit or not tech_data or not sub_text:

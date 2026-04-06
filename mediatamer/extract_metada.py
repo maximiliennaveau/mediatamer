@@ -15,29 +15,33 @@ def extract_all_metadata(
     """Perform all extractions and populate the provided metadata object."""
 
     # Check if the cache contains the metadata
+    meta = None
     if not no_cache:
         meta = load_metadata(metadata.path)
-        if meta:
-            return meta
+        metadata = meta
 
     # 1. Technical
-    print("Extracting technical metadata...")
-    TechnicalSignals.from_metadata(metadata)
+    if meta is None:
+        print("Extracting technical metadata...")
+        TechnicalSignals.from_metadata(metadata)
 
     # 2. GuessIt
-    print("Extracting guessit metadata...")
-    infer_context_from_path(metadata)
+    if meta is None:
+        print("Extracting guessit metadata...")
+        infer_context_from_path(metadata)
 
     # 2.5 OpenSubtitles
-    print("Extracting opensubtitles metadata...")
-    try:
-        OpenSubtitleSignals(metadata, config).extract()
-    except Exception as e:
-        print(f"Failed to extract OpenSubtitles metadata: {e}")
+    if meta is None:
+        print("Extracting opensubtitles metadata...")
+        try:
+            OpenSubtitleSignals(metadata, config).extract()
+        except Exception as e:
+            print(f"Failed to extract OpenSubtitles metadata: {e}")
 
     # 3. Subtitles
-    print("Extracting subtitle metadata...")
-    SubtitleSignals(metadata, config).extract()
+    if meta is None:
+        print("Extracting subtitle metadata...")
+        SubtitleSignals(metadata, config).extract()
 
     # 4. AI Episode Matcher
     print("Extracting AI episode matcher metadata...")

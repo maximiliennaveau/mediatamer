@@ -5,7 +5,7 @@ from pathlib import Path
 
 from mediatamer.config import load_config
 from mediatamer.extract_metada import extract_all_metadata
-from mediatamer.signals.video_metadata import VideoMetadata
+from mediatamer.signals.video_metadata import VideoMetadata, metadata_to_dict
 from mediatamer.utils import extract_files_to_process
 from mediatamer.cli.argparse_utils import add_common_arguments
 

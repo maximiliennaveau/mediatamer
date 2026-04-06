@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 from mediatamer.signals.ai_episode_matcher import AIEpisodeMatcher
 from mediatamer.signals.video_metadata import VideoMetadata
 
+
 class TestAIEpisodeMatcher(unittest.TestCase):
     def setUp(self):
         self.matcher = AIEpisodeMatcher()
@@ -21,7 +22,7 @@ class TestAIEpisodeMatcher(unittest.TestCase):
         meta = VideoMetadata(path=p)
         meta.guessit = {"show": "Test Show", "season": 1}
         meta.technical = MagicMock()
-        meta.technical.to_legacy_dict.return_value = {"duration": 1200}
+        meta.technical.to_dict.return_value = {"duration": 1200}
         meta.subtitles = "Some subtitle text"
 
         self.matcher.match(meta)
