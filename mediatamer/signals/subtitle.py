@@ -82,9 +82,6 @@ class SubtitleSignals:
         Extract subtitles for the entire video and populate the metadata object.
         Outputs the VideoMetadata object filled with extracted subtitles.
         """
-        if self.metadata.subtitles:
-            return self.metadata
-
         # 1. Try text-based subtitle streams (SRT/ASS/etc).
         out = self._extract_text_sub_streams()
         if out:

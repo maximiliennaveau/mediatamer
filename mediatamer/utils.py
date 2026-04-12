@@ -4,6 +4,7 @@ from pathlib import Path
 from langdetect import detect
 import re
 
+from mediatamer.config import load_config
 from mediatamer.parameters import get_extensions
 
 
@@ -66,20 +67,21 @@ def extract_files_to_process(input_dir: Path):
         print("No files found in", input_dir)
         return None
 
-    # File size filtering logic
-    from mediatamer.config import load_config
+    # config = load_config()
+    # threshold = config.get("batch-size-threshold")
+    # if threshold:
+    #     max_size = max((f.stat().st_size for f in files), default=0)
+    #     if max_size > 0:
+    #         limit = max_size * float(threshold)
+    #         original_count = len(files)
+    #         files = [f for f in files if f.stat().st_size >= limit]
+    #         if len(files) < original_count:
+    #             print(
+    #                 f"Filtered out {original_count - len(files)} files based on size threshold ({threshold})"
+    #             )
 
-    config = load_config()
-    threshold = config.get("batch-size-threshold")
-    if threshold:
-        max_size = max((f.stat().st_size for f in files), default=0)
-        if max_size > 0:
-            limit = max_size * float(threshold)
-            original_count = len(files)
-            files = [f for f in files if f.stat().st_size >= limit]
-            if len(files) < original_count:
-                print(
-                    f"Filtered out {original_count - len(files)} files based on size threshold ({threshold})"
-                )
+    print(f"Found {len(files)} files to process:")
+    for file in files:
+        print(f"\t- {file}")
 
     return files

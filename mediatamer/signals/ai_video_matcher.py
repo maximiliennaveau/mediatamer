@@ -1,7 +1,7 @@
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from mediatamer.config import load_config
-from mediatamer.signals.tmdb import fetch_tmdb_episodes
+from mediatamer.signals.tmdb import fetch_tmdb_episodes, fetch_tmdb_person_credits
 from mediatamer.signals.tvdb import fetch_tvdb_info
 from mediatamer.ai import run_ai
 from mediatamer.signals.video_metadata import VideoMetadata
@@ -37,7 +37,12 @@ class AIVideoMatcher:
             print(f"\n[AI Agent Loop] Iteration {iteration}/{max_iterations}...")
 
             prompt = self._build_agentic_prompt(
-                meta.path.name, guess, tech_data, sub_text, search_history
+                meta.path.name,
+                guess,
+                tech_data,
+                sub_text,
+                search_history,
+                meta.cast_profile,
             )
 
             # Note: We must ensure JSON format from the AI.
@@ -200,10 +205,29 @@ class AIVideoMatcher:
     ) -> List[Dict[str, Any]]:
         results = []
         for q in queries:
-            sh = q.get("show")
-            se_raw = q.get("season")
-            if not sh or se_raw is None:
-                continue
+            q_type = q.get("type", "SEARCH_EPISODES")
+
+            if q_type == "SEARCH_PERSON":
+                name = q.get("name")
+                if not name:
+                    continue
+                print(f"     Fetching TMDB for Person '{name}'")
+                credits = fetch_tmdb_person_credits(name, self.tmdb_api_key)
+
+                # Keep top 15 to avoid huge context
+                filtered_credits = credits[:15]
+                results.append(
+                    {
+                        "query": {"type": "SEARCH_PERSON", "name": name},
+                        "results_count": len(filtered_credits),
+                        "credits": filtered_credits,
+                    }
+                )
+            else:
+                sh = q.get("show")
+                se_raw = q.get("season")
+                if not sh or se_raw is None:
+                    continue
             se = self._resolve_season(se_raw)
 
             print(f"     Fetching TMDB & TVDB for '{sh}' Season {se} (raw: '{se_raw}')")
@@ -244,6 +268,7 @@ class AIVideoMatcher:
         tech: Dict,
         subtitles: str,
         search_history: List[Dict],
+        cast_profile: Optional[Any] = None,
     ) -> str:
         video_metadata = {
             "filename": filename,
@@ -254,12 +279,19 @@ class AIVideoMatcher:
         # Cap subtitles so it isn't too huge
         subtitles_snip = subtitles[:8000] if len(subtitles) > 8000 else subtitles
 
+        cast_section = ""
+        if cast_profile:
+            cast_section = f"""
+### CAST PROFILE (extracted from subtitles)
+{json.dumps(cast_profile.to_dict() if hasattr(cast_profile, "to_dict") else cast_profile, indent=2)}
+"""
+
         prompt = f"""You are an elite TV series database assistant acting as an autonomous search agent.
-Your objective is to identify the EXACT TV show, season, and episode based strictly on the provided subtitle snippet and metadata.
+Your objective is to identify the EXACT TV show, season, and episode based strictly on the provided subtitle snippet, metadata, and extracted cast.
 
 ### VIDEO FILE METADATA
 {json.dumps(video_metadata, indent=2)}
-
+{cast_section}
 ### SUBTITLE CONTENT
 ---
 {subtitles_snip}
@@ -269,22 +301,32 @@ Your objective is to identify the EXACT TV show, season, and episode based stric
 {json.dumps(search_history, indent=2)}
 
 ### YOUR INSTRUCTIONS
-You operate in a loop. You can either search the database for candidate episodes, or declare you have definitively found the match. Only use "season: 0" to search for Specials (like Christmas specials or bonus episodes).
+You operate in a loop. You can either search the database for candidate episodes or people, or declare you have definitively found the match.
 
-IF you need to see episode summaries for a specific show and season to find a match, return a JSON object with status "SEARCHING".
-The "season" field inside each query can be an INTEGER (e.g. 9) or a STRING ALIAS (e.g. "Specials", "Christmas Special", "Extras").
-Examples: {{"show": "Doctor Who", "season": 0}}, {{"show": "Doctor Who", "season": "Christmas Special"}}, {{"show": "Doctor Who", "season": 9}}
+Wait for me to run the query and provide the results in the next iteration.
+To search, return a JSON object with status "SEARCHING".
+You have TWO types of queries available:
+
+1. SEARCH_EPISODES — fetch all episodes of a show/season with their overviews. 
+   Only use "season: 0" to search for Specials (like Christmas specials or bonus episodes).
+   The "season" field inside each query can be an INTEGER (e.g. 9) or a STRING ALIAS (e.g. "Specials", "Christmas Special").
+     {{"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": 0}}
+
+2. SEARCH_PERSON — look up a real actor or crew member and see which shows they appeared in.
+   If character names are distinctive, prioritise SEARCH_PERSON on the actor who plays them. (Use their real name from the subtitles if known).
+     {{"type": "SEARCH_PERSON", "name": "Bryan Cranston", "role": "cast"}}
+
+Example SEARCHING output:
 {{
   "status": "SEARCHING",
   "reasoning": "The dialogue hints at a Christmas special. I should check the Specials season of Doctor Who.",
   "queries": [
-    {{"show": "Doctor Who", "season": "Christmas Special"}},
-    {{"show": "Doctor Who", "season": 0}}
+    {{"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": "Christmas Special"}},
+    {{"type": "SEARCH_PERSON", "name": "Peter Capaldi"}}
   ]
 }}
-Wait for me to run the query and provide the results in the next iteration.
 
-IF you are absolutely certain you have found the matching episode because the subtitle dialogue clearly aligns with one of the episode 'overviews' in your SEARCH HISTORY, return a JSON object with status "FOUND":
+IF you are absolutely certain you have found the matching episode because the subtitle dialogue clearly aligns with an episode overview or cast credits in your SEARCH HISTORY, return a JSON object with status "FOUND":
 {{
   "status": "FOUND",
   "reasoning": "The dialogue matches 'Last Christmas' perfectly from the Season 0 search results.",
@@ -295,6 +337,7 @@ IF you are absolutely certain you have found the matching episode because the su
   "confidence_score": 95.0
 }}
 
+IMPORTANT: Do NOT invent or guess actor names. Only use SEARCH_PERSON for names that are EXACTLY listed in the real_actors array of the Cast Profile. If the array is empty, do not execute a PERSON search.
 IMPORTANT: Return ONLY valid JSON format. Provide nothing else outside of the JSON block. Do not use markdown wrappers.
 """
         return prompt

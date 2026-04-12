@@ -31,6 +31,7 @@ def main():
     metadata_list = {}
     for f in files:
         try:
+            print(f"Extracting metadata for {f}...")
             meta = VideoMetadata(path=f)
             meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
             metadata_list[str(f)] = metadata_to_dict(meta)
@@ -44,6 +45,7 @@ def main():
         print(f"Episode: {meta.ai_match.get('episode')}")
         print(f"Title: {meta.ai_match.get('title')}")
         print(f"Type: {meta.ai_match.get('type')}")
+        print(f"Extracting metadata for {f}... Done")
 
 
 if __name__ == "__main__":

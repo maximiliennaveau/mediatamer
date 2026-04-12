@@ -100,3 +100,67 @@ def fetch_tmdb_episodes(
         print(f"TMDB Fetch Error: {e}")
 
     return final_show_name, episodes_result
+
+
+def fetch_tmdb_person_credits(
+    person_name: str, api_key: str, media_type: str = "tv", locale: str = "en-US"
+) -> List[Dict[str, Any]]:
+    """
+    Search TMDB for a person by name and return their TV (or movie) credits.
+    Each credit entry includes: show_name, show_id, character, episode_count.
+    """
+    try:
+        # 1. Search for Person ID
+        search_url = "https://api.themoviedb.org/3/search/person"
+        params = {
+            "api_key": api_key,
+            "query": person_name,
+            "language": locale,
+        }
+        resp = requests.get(search_url, params=params, timeout=10)
+        if not resp.ok:
+            return []
+
+        results = resp.json().get("results", [])
+        if not results:
+            return []
+
+        # Take the top match
+        person_id = results[0]["id"]
+
+        # 2. Fetch TV credits
+        credits_url = f"https://api.themoviedb.org/3/person/{person_id}/tv_credits"
+        c_resp = requests.get(credits_url, params={"api_key": api_key, "language": locale}, timeout=10)
+        if not c_resp.ok:
+            return []
+
+        credit_data = c_resp.json()
+        cast_credits = credit_data.get("cast", [])
+        crew_credits = credit_data.get("crew", [])
+        
+        # Combine and format credits
+        all_credits = []
+        for c in cast_credits:
+            all_credits.append({
+                "show_id": c.get("id"),
+                "show_name": c.get("name"),
+                "character": c.get("character"),
+                "episode_count": c.get("episode_count"),
+                "role_type": "cast"
+            })
+        for c in crew_credits:
+            all_credits.append({
+                "show_id": c.get("id"),
+                "show_name": c.get("name"),
+                "job": c.get("job"),
+                "department": c.get("department"),
+                "episode_count": c.get("episode_count"),
+                "role_type": "crew"
+            })
+        
+        # Sort by episode count descending
+        all_credits.sort(key=lambda x: x.get("episode_count", 0), reverse=True)
+        return all_credits
+    except Exception as e:
+        print(f"TMDB Person Fetch Error: {e}")
+        return []
