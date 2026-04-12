@@ -1,5 +1,6 @@
 import json
-from typing import List, Dict, Any, Optional
+import inspect
+from typing import List, Dict, Any
 from mediatamer.config import load_config
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, fetch_tmdb_person_credits
 from mediatamer.signals.tvdb import fetch_tvdb_info
@@ -21,13 +22,7 @@ class AIVideoMatcher:
 
     def match(self, meta: VideoMetadata) -> None:
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
-        tech_data = meta.technical.to_dict() if meta.technical else {}
         sub_text = meta.subtitles or ""
-
-        guess = {
-            "guessit": meta.guessit,
-            "heuristics": meta.heuristics,
-        }
         search_history = []
         max_iterations = 4
         iteration = 0
@@ -36,14 +31,7 @@ class AIVideoMatcher:
             iteration += 1
             print(f"\n[AI Agent Loop] Iteration {iteration}/{max_iterations}...")
 
-            prompt = self._build_agentic_prompt(
-                meta.path.name,
-                guess,
-                tech_data,
-                sub_text,
-                search_history,
-                meta.cast_profile,
-            )
+            prompt = self._build_agentic_prompt(meta, search_history)
 
             # Note: We must ensure JSON format from the AI.
             response = run_ai(prompt, json_mode=True)
@@ -263,81 +251,88 @@ class AIVideoMatcher:
 
     def _build_agentic_prompt(
         self,
-        filename: str,
-        guess: Dict,
-        tech: Dict,
-        subtitles: str,
+        meta: VideoMetadata,
         search_history: List[Dict],
-        cast_profile: Optional[Any] = None,
     ) -> str:
-        video_metadata = {
-            "filename": filename,
-            "heuristics_guess": guess,
-            "duration_sec": tech.get("duration"),
+        """
+        Builds a structured, agentic prompt for the AI Video Matcher.
+        Using inspect.cleandoc to ensure clean formatting without leading whitespace.
+        """
+        # 1. Identity and Core Instructions
+        identity = inspect.cleandoc("""
+            # IDENTITY
+            You are an Autonomous Media Identification Agent. Your goal is to identify the EXACT TV show, season, and episode 
+            for the provided video file. You operate in an iterative loop, using results from previous database searches 
+             to refine your identification.
+        """)
+
+        # 2. File and Technical Evidence
+        # We include the full path because it often contains a parent folder named after the show.
+        evidence_data = {
+            "full_path": str(meta.path),
+            "filename": meta.path.name,
+            "duration_sec": meta.technical.duration if meta.technical else None,
+            "heuristics_guess": meta.heuristics,
+            "guessit_analysis": meta.guessit,
+            "ai_filename_guess": meta.ai_guess,
+            "opensubtitles_match": meta.opensubtitles
         }
 
-        # Cap subtitles so it isn't too huge
-        subtitles_snip = subtitles[:8000] if len(subtitles) > 8000 else subtitles
+        evidence_file = inspect.cleandoc(f"""
+            ## EVIDENCE: FILE SYSTEM & TECHNICAL
+            {json.dumps(evidence_data, indent=2)}
+        """)
 
-        cast_section = ""
-        if cast_profile:
-            cast_section = f"""
-### CAST PROFILE (extracted from subtitles)
-{json.dumps(cast_profile.to_dict() if hasattr(cast_profile, "to_dict") else cast_profile, indent=2)}
-"""
+        # 3. Content-based Evidence (Subtitles & Cast)
+        # Summary and cast profiles are high-confidence signals extracted from the video content itself.
+        summary_content = meta.summary.get("summary", "No summary available.") if isinstance(meta.summary, dict) else str(meta.summary)
+        
+        evidence_content = inspect.cleandoc(f"""
+            ## EVIDENCE: CONTENT ANALYSIS
+            ### SUBTITLE SUMMARY
+            {summary_content}
 
-        prompt = f"""You are an elite TV series database assistant acting as an autonomous search agent.
-Your objective is to identify the EXACT TV show, season, and episode based strictly on the provided subtitle snippet, metadata, and extracted cast.
+            ### CAST PROFILE
+            {json.dumps(meta.cast_profile, indent=2)}
+        """)
 
-### VIDEO FILE METADATA
-{json.dumps(video_metadata, indent=2)}
-{cast_section}
-### SUBTITLE CONTENT
----
-{subtitles_snip}
----
+        # 4. Search Commands
+        commands = inspect.cleandoc("""
+            ## AVAILABLE SEARCH COMMANDS
+            To gather more information, return a JSON object with status "SEARCHING".
+            
+            1. **SEARCH_EPISODES**: Fetch episode lists and overviews for a show. 
+               - Use "season: 0" for Specials/Movies/OVA.
+               - Example: {"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": 0}
 
-### SEARCH HISTORY AND DATABASE RESULTS
-{json.dumps(search_history, indent=2)}
+            2. **SEARCH_PERSON**: Look up actor/crew credits. 
+               - Use names from the Cast Profile to disambiguate similar titles.
+               - Example: {"type": "SEARCH_PERSON", "name": "Bryan Cranston"}
+        """)
 
-### YOUR INSTRUCTIONS
-You operate in a loop. You can either search the database for candidate episodes or people, or declare you have definitively found the match.
+        # 5. Output Format
+        output_format = inspect.cleandoc("""
+            ## OUTPUT FORMAT
+            - Return ONLY valid JSON.
+            - Provide a "reasoning" field explaining your strategy.
+            - If found: { "status": "FOUND", "show": "...", "season": X, "episode": Y, "title": "...", "confidence_score": 0-100 }
+            - If searching: { "status": "SEARCHING", "queries": [...] }
+        """)
 
-Wait for me to run the query and provide the results in the next iteration.
-To search, return a JSON object with status "SEARCHING".
-You have TWO types of queries available:
+        # 6. History
+        history_section = inspect.cleandoc(f"""
+            ## PREVIOUS SEARCH RESULTS
+            {json.dumps(search_history, indent=2) if search_history else "No searches performed yet."}
+        """)
 
-1. SEARCH_EPISODES — fetch all episodes of a show/season with their overviews. 
-   Only use "season: 0" to search for Specials (like Christmas specials or bonus episodes).
-   The "season" field inside each query can be an INTEGER (e.g. 9) or a STRING ALIAS (e.g. "Specials", "Christmas Special").
-     {{"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": 0}}
+        # Assemble final prompt
+        prompt = "\n\n".join([
+            identity,
+            evidence_file,
+            evidence_content,
+            commands,
+            output_format,
+            history_section
+        ])
 
-2. SEARCH_PERSON — look up a real actor or crew member and see which shows they appeared in.
-   If character names are distinctive, prioritise SEARCH_PERSON on the actor who plays them. (Use their real name from the subtitles if known).
-     {{"type": "SEARCH_PERSON", "name": "Bryan Cranston", "role": "cast"}}
-
-Example SEARCHING output:
-{{
-  "status": "SEARCHING",
-  "reasoning": "The dialogue hints at a Christmas special. I should check the Specials season of Doctor Who.",
-  "queries": [
-    {{"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": "Christmas Special"}},
-    {{"type": "SEARCH_PERSON", "name": "Peter Capaldi"}}
-  ]
-}}
-
-IF you are absolutely certain you have found the matching episode because the subtitle dialogue clearly aligns with an episode overview or cast credits in your SEARCH HISTORY, return a JSON object with status "FOUND":
-{{
-  "status": "FOUND",
-  "reasoning": "The dialogue matches 'Last Christmas' perfectly from the Season 0 search results.",
-  "show": "Doctor Who",
-  "season": 0,
-  "episode": 142,
-  "title": "Last Christmas",
-  "confidence_score": 95.0
-}}
-
-IMPORTANT: Do NOT invent or guess actor names. Only use SEARCH_PERSON for names that are EXACTLY listed in the real_actors array of the Cast Profile. If the array is empty, do not execute a PERSON search.
-IMPORTANT: Return ONLY valid JSON format. Provide nothing else outside of the JSON block. Do not use markdown wrappers.
-"""
         return prompt

@@ -14,7 +14,7 @@ except ImportError:
 
 from mediatamer.ai import run_ai
 from mediatamer.signals.video_metadata import VideoMetadata
-from mediatamer.signals.cast_extractor import CastProfile
+from mediatamer.signals.cast_from_subtitles import CastProfile
 
 
 class VideoCreditsExtractor:

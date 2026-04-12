@@ -2,6 +2,7 @@ import json
 import unittest
 
 from mediatamer.signals.summary_from_subtitles import extract_summary_from_subtitles
+from mediatamer.signals.video_metadata import VideoMetadata
 
 
 class TestSummaryFromSubtitles(unittest.TestCase):
@@ -39,17 +40,17 @@ class TestSummaryFromSubtitles(unittest.TestCase):
 
     def test_summary_from_subtitles(self):
         print("--- Running Summary Generator on Sample Story ---")
-        result = extract_summary_from_subtitles(self.SAMPLE_SUBTITLES)
+        metadata = VideoMetadata(path="/tmp/test.mp4")
+        metadata.subtitles = self.SAMPLE_SUBTITLES
+        result = extract_summary_from_subtitles(metadata)
 
-        # We convert to dict for a pretty-printed view of the extracted data
-        print(json.dumps(result.to_dict(), indent=2))
-        if result.confidence > 70:
+        if result["confidence"] > 70:
             print("\n✅ Verification Successful: High confidence extraction.")
         else:
             print(
-                f"\n⚠️ Warning: Low confidence ({result.confidence}). Check prompt vs. sample text."
+                f"\n⚠️ Warning: Low confidence ({result['confidence']}). Check prompt vs. sample text."
             )
-        self.assertGreater(result.confidence, 70)
+        self.assertGreater(result["confidence"], 70)
 
 
 if __name__ == "__main__":

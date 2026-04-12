@@ -1,13 +1,14 @@
 from typing import Dict
 
+from mediatamer.signals.ai_video_matcher import match_episode
 from mediatamer.signals.cache import load_metadata, save_metadata
+from mediatamer.signals.credits_extractor import VideoCreditsExtractor
+from mediatamer.signals.guessit import infer_context_from_path
+from mediatamer.signals.opensubtitles import OpenSubtitleSignals
+from mediatamer.signals.subtitle import SubtitleSignals
+from mediatamer.signals.summary_from_subtitles import extract_summary_from_subtitles
 from mediatamer.signals.technical import TechnicalSignals
 from mediatamer.signals.video_metadata import VideoMetadata
-from mediatamer.signals.guessit import infer_context_from_path
-from mediatamer.signals.subtitle import SubtitleSignals
-from mediatamer.signals.opensubtitles import OpenSubtitleSignals
-from mediatamer.signals.ai_video_matcher import match_episode
-from mediatamer.signals.credits_extractor import VideoCreditsExtractor
 
 
 def extract_all_metadata(
@@ -44,12 +45,15 @@ def extract_all_metadata(
         print("Extracting subtitle metadata...")
         SubtitleSignals(metadata, config).extract()
 
-    # 3.5 Credits
-    if meta.cast_profile is None:
-        print("Extracting credits metadata...")
-        VideoCreditsExtractor(config).extract(metadata)
+    # 4 Credits
+    print("Extracting credits metadata...")
+    VideoCreditsExtractor(config).extract(metadata)
 
-    # 4. AI Episode Matcher
+    # 5. Summary from subtitles
+    print("Extracting summary from subtitles...")
+    extract_summary_from_subtitles(metadata, config)
+
+    # 6. AI Episode Matcher
     print("Extracting AI episode matcher metadata...")
     match_episode(metadata)
 

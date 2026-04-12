@@ -21,6 +21,7 @@ class VideoMetadata:
     ai_match: Dict[str, Any] = field(default_factory=dict)
     opensubtitles: Dict[str, Any] = field(default_factory=dict)
     cast_profile: Dict[str, Any] = field(default_factory=dict)
+    summary: Dict[str, Any] = field(default_factory=dict)
 
 
 def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
@@ -35,6 +36,7 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
         "ai_match": metadata.ai_match,
         "opensubtitles": metadata.opensubtitles,
         "cast_profile": metadata.cast_profile,
+        "summary": metadata.summary,
     }
 
 
@@ -49,6 +51,7 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
     opensubtitles = data.get("opensubtitles", {})
     technical = data.get("technical", {})
     cast_profile = data.get("cast_profile", {})
+    summary = data.get("summary", {})
 
     return VideoMetadata(
         path=path,
@@ -59,5 +62,6 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
         ai_match=ai_match,
         opensubtitles=opensubtitles,
         cast_profile=cast_profile,
-        technical=TechnicalSignals.from_dict(technical) if technical else None,
+        technical=TechnicalSignals.from_dict(technical),
+        summary=summary,
     )
