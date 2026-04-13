@@ -7,7 +7,7 @@ if TYPE_CHECKING:
     from mediatamer.signals.video_metadata import VideoMetadata
 
 
-def extract_summary_from_subtitles(metadata: "VideoMetadata") -> Dict:
+def extract_summary_from_subtitles(metadata: "VideoMetadata", config: dict) -> Dict:
     """
     Extracts a structured summary from subtitles and populates the metadata.
     Returns the extracted SummaryFromSubtitle object.
@@ -75,7 +75,7 @@ def extract_summary_from_subtitles(metadata: "VideoMetadata") -> Dict:
     {metadata.subtitles}
     """
 
-    json_response = run_ai(prompt, json_mode=True)
+    json_response = run_ai(prompt, config, json_mode=True)
     try:
         response = json.loads(json_response)
 

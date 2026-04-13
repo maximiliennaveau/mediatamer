@@ -42,7 +42,7 @@ class CastProfile:
         )
 
 
-def extract_cast_from_subtitles(subtitle_text: str) -> CastProfile:
+def extract_cast_from_subtitles(subtitle_text: str, config: dict) -> CastProfile:
     """
     Extracts cast, character, crew, and show name hints from subtitle text
     using an LLM.
@@ -97,7 +97,7 @@ No extra text, no markdown.
 {subtitle_text}
 """
 
-    response = run_ai(prompt, json_mode=True)
+    response = run_ai(prompt, config, json_mode=True)
     try:
         data = json.loads(response)
         return CastProfile.from_dict(data)

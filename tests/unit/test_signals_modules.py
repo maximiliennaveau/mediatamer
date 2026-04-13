@@ -14,9 +14,12 @@ class TestSignalsModules(unittest.TestCase):
             metadata = VideoMetadata(path=p)
 
         # Test the parsing logic directly (mocking AI to avoid network)
-        with patch("mediatamer.signals.guessit.run_ai", return_value='{"type": "episode", "show": "Doctor Who", "season": 9}'):
+        with patch(
+            "mediatamer.signals.guessit.run_ai",
+            return_value='{"type": "episode", "show": "Doctor Who", "season": 9}',
+        ):
             r = infer_context_from_path(metadata)
-            
+
         self.assertIsInstance(r, dict)
         self.assertEqual(r.get("season"), 9)
         self.assertEqual(r.get("show"), "Doctor Who")
@@ -31,6 +34,6 @@ class TestSignalsModules(unittest.TestCase):
             with patch.object(Path, "exists", return_value=True):
                 metadata = VideoMetadata(path=p)
                 tech = TechnicalSignals.from_metadata(metadata)
-                
+
             self.assertIsInstance(tech, TechnicalSignals)
             self.assertEqual(tech.duration, 120.0)

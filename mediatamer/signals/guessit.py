@@ -100,7 +100,7 @@ def extract_heuristics(metadata: VideoMetadata) -> None:
     metadata.heuristics = first_guess
 
 
-def extract_ai_guess(metadata: VideoMetadata) -> None:
+def extract_ai_guess(metadata: VideoMetadata, config: dict) -> None:
     """Ask AI for parsing."""
     ai_result_raw = run_ai(
         f"""
@@ -133,6 +133,7 @@ def extract_ai_guess(metadata: VideoMetadata) -> None:
         If a field is missing, set it to null. 
         Output ONLY a valid JSON object.
     """,
+        config,
         json_mode=True,
     )
 

@@ -47,7 +47,7 @@ class TestOllamaAutomation(unittest.TestCase):
         mock_client.list.return_value = {"models": [{"name": "llama3"}]}
         mock_client.chat.return_value = {"message": {"content": "Hello"}}
 
-        res = run_ai("test prompt")
+        res = run_ai("test prompt", config={})
 
         self.assertEqual(res, "Hello")
         mock_client.list.assert_called_once()

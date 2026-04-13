@@ -51,7 +51,7 @@ def main():
     # os.environ["OLLAMA_MODELS"] = "/path/to/your/models"
 
     try:
-        response = run_ai(prompt)
+        response = run_ai(prompt, config)
         if response:
             print(f"AI Response: {response.strip()}")
             print("-" * 30)

@@ -1,34 +1,112 @@
 import os
-import json
 import time
 import requests
 import subprocess
-
-from mediatamer.config import load_config
+from typing import Optional, Dict, Any
 
 import ollama
 
 
-def ensure_model_exists(model: str, client: ollama.Client = None, api_url: str = None):
-    """Ensure the model exists locally in Ollama, pull it if not."""
-    # Try via library if client is provided
-    if client:
+class OllamaClient:
+    """Singleton client for Ollama interaction with performance optimizations."""
+
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(OllamaClient, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        if self._initialized and config is None:
+            return
+
+        self.config = config or {}
+        self.api_url = self.config.get("ollama-api-url", "http://localhost:11434")
+        self.api_key = self.config.get("ollama-api-key")
+        self.models_path = self.config.get("ollama-models-path")
+        self.model = self.config.get("ollama-model")
+
+        host = self.api_url if self.api_url else os.environ.get("OLLAMA_HOST")
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        self.client = ollama.Client(host=host, headers=headers)
+        self.server_verified = False
+        self.verified_models = set()
+        self._initialized = True
+
+    def ensure_server_running(self):
+        """Check if Ollama server is running, and start it if not. Cached."""
+        if self.server_verified:
+            return
+
         try:
-            resp = client.list()
-            # Handle both ListResponse object and dict (older library versions)
+            # Quick probe
+            requests.get(f"{self.api_url.rstrip('/')}/api/tags", timeout=2)
+            self.server_verified = True
+            return
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            pass
+
+        print(f"Ollama server not found at {self.api_url}. Starting 'ollama serve'...")
+
+        if not self.models_path:
+            raise ValueError("Ollama models path not found in config.")
+        if not self.api_key:
+            raise ValueError("Ollama app key not found in config.")
+
+        env = os.environ.copy()
+        env["OLLAMA_MODELS"] = self.models_path
+        env["OLLAMA_API_KEY"] = self.api_key
+
+        try:
+            subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                env=env,
+            )
+
+            # Wait for the server to become ready
+            max_retries = 30
+            for i in range(max_retries):
+                try:
+                    requests.get(f"{self.api_url.rstrip('/')}/api/tags", timeout=1)
+                    print("Ollama server is now running.")
+                    self.server_verified = True
+                    return
+                except requests.exceptions.RequestException:
+                    time.sleep(1)
+            print("Warning: Timed out waiting for Ollama server to start.")
+        except Exception as e:
+            print(f"Error starting Ollama server: {e}")
+
+    def ensure_model_exists(self, model: str):
+        """Ensure the model exists locally, pull it if not. Cached."""
+        if model in self.verified_models:
+            return
+
+        self.ensure_server_running()
+
+        try:
+            resp = self.client.list()
             models = resp.models if hasattr(resp, "models") else resp.get("models", [])
 
             for m in models:
-                # Handle both Model object and dict
                 m_name = getattr(m, "model", None) or getattr(m, "name", None)
                 if not m_name and isinstance(m, dict):
                     m_name = m.get("model") or m.get("name")
 
                 if m_name and (m_name == model or m_name.startswith(f"{model}:")):
+                    self.verified_models.add(model)
                     return
 
-            print(f"Model '{model}' not found via library. Pulling...")
-            for progress in client.pull(model=model, stream=True):
+            print(f"Model '{model}' not found. Pulling...")
+            for progress in self.client.pull(model=model, stream=True):
                 status = (
                     progress.get("status")
                     if isinstance(progress, dict)
@@ -36,153 +114,96 @@ def ensure_model_exists(model: str, client: ollama.Client = None, api_url: str =
                 )
                 if status:
                     print(f"Pulling {model}: {status}")
-            return
+            self.verified_models.add(model)
         except Exception as e:
-            print(f"Ollama Library Check/Pull Error: {e}")
+            print(f"Ollama Model Verification Error: {e}")
 
-    # Fallback via Requests API
-    if api_url:
+    def chat(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        json_mode: bool = False,
+        num_ctx: int = 16384,
+        keep_alive: Any = -1,
+    ) -> str:
+        """Run a chat completion."""
+        target_model = model or self.model
+        if not target_model:
+            raise ValueError("No model specified for AI execution.")
+
+        self.ensure_model_exists(target_model)
+
         try:
-            endpoint = api_url.rstrip("/")
-            resp = requests.get(f"{endpoint}/api/tags", timeout=10)
-            if resp.status_code == 200:
-                models = resp.json().get("models", [])
-                if not any(
-                    m["name"] == model or m["name"].startswith(f"{model}:")
-                    for m in models
-                ):
-                    print(f"Model '{model}' not found via API. Pulling...")
-                    pull_resp = requests.post(
-                        f"{endpoint}/api/pull",
-                        json={"name": model},
-                        stream=True,
-                        timeout=None,
-                    )
-                    for line in pull_resp.iter_lines():
-                        if line:
-                            data = json.loads(line)
-                            status = data.get("status")
-                            if status:
-                                print(f"Pulling {model}: {status}")
-            else:
-                print(f"Failed to check models at {api_url}: {resp.status_code}")
+            response = self.client.chat(
+                model=target_model,
+                messages=[{"role": "user", "content": prompt}],
+                format="json" if json_mode else None,
+                options={
+                    "temperature": 0,
+                    "num_ctx": num_ctx,
+                },
+                keep_alive=keep_alive,
+            )
+            return response["message"]["content"]
         except Exception as e:
-            print(f"Ollama API Check/Pull Error: {e}")
+            print(f"Ollama Library Error: {e}")
+            # Fallback to direct request if library fails
+            return self._generate_fallback(prompt, target_model, json_mode, num_ctx, keep_alive)
+
+    def _generate_fallback(
+        self, prompt: str, model: str, json_mode: bool, num_ctx: int, keep_alive: Any
+    ) -> str:
+        """Requests-based fallback for AI generation."""
+        try:
+            headers = {}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json" if json_mode else None,
+                "options": {"temperature": 0, "num_ctx": num_ctx},
+                "keep_alive": keep_alive,
+            }
+            endpoint = f"{self.api_url.rstrip('/')}/api/generate"
+
+            resp = requests.post(endpoint, json=payload, headers=headers, timeout=300)
+            resp.raise_for_status()
+            return resp.json().get("response", "")
+        except Exception as e:
+            print(f"Ollama Fallback Error: {e}")
+            return ""
+
+
+def run_ai(
+    prompt: str,
+    config: dict,
+    json_mode: bool = False,
+    num_ctx: int = 16384,
+    keep_alive: Any = -1,
+) -> str:
+    """Entry point for running AI analysis. Uses optimized singleton client."""
+    client = OllamaClient(config)
+    return client.chat(
+        prompt=prompt,
+        json_mode=json_mode,
+        num_ctx=num_ctx,
+        keep_alive=keep_alive,
+    )
 
 
 def ensure_ollama_server_running(config: dict):
-    """Check if Ollama server is running, and start it if not."""
-    api_url = config.get("ollama-api-url")
-    api_key = config.get("ollama-api-key")
-    models_path = config.get("ollama-models-path")
-    try:
-        # Quick probe to see if server responds
-        requests.get(f"{api_url.rstrip('/')}/api/tags", timeout=1)
-        return
-    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-        pass
-
-    print(f"Ollama server not found at {api_url}. Starting 'ollama serve'...")
-
-    if not models_path:
-        raise ValueError("Ollama models path not found in config.")
-    if not api_key:
-        raise ValueError("Ollama app key not found in config.")
-
-    # Setup environment for the server
-    env = os.environ.copy()
-    print(f"Using models path from config: {models_path}")
-    env["OLLAMA_MODELS"] = models_path
-
-    print("Using API/App Key for authentication.")
-    # If OLLAMA_APP_KEY is used in config, also set it for the subprocess env
-    env["OLLAMA_API_KEY"] = api_key
-
-    try:
-        # Start the server in the background.
-        subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            env=env,
-        )
-
-        # Wait for the server to become ready
-        max_retries = 20
-        for i in range(max_retries):
-            try:
-                requests.get(f"{api_url.rstrip('/')}/api/tags", timeout=1)
-                print("Ollama server is now running.")
-                return
-            except requests.exceptions.RequestException:
-                time.sleep(1)
-        print("Warning: Timed out waiting for Ollama server to start.")
-    except Exception as e:
-        print(f"Error starting Ollama server: {e}")
+    """Compatibility wrapper for ensuring server is running."""
+    OllamaClient(config).ensure_server_running()
 
 
-def run_ai(prompt: str, json_mode: bool = False) -> str:
-    """Run AI analysis using Ollama (library or requests fallback) and return raw string response.
-
-    If json_mode is True, it sets the format to 'json' for Ollama.
-    """
-    # Load configuration
-    config = load_config()
-
-    model = config.get("ollama-model")
-    api_url = config.get("ollama-api-url")
-    api_key = config.get("ollama-api-key")
-
-    # Ensure server is running
-    ensure_ollama_server_running(config)
-
-    # Ensure model exists
-    host = api_url if api_url else os.environ.get("OLLAMA_HOST")
-    try:
-        # Client handles OLLAMA_API_KEY env var automatically in recent versions,
-        # but we can also pass it in headers for maximum compatibility.
-        headers = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        client = ollama.Client(host=host, headers=headers)
-        ensure_model_exists(model, client=client)
-        response = client.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            format="json" if json_mode else None,
-            options={"temperature": 0, "num_ctx": 32768},
-        )
-        return response["message"]["content"]
-    except Exception as e:
-        print(f"Ollama Library Error: {e}")
-        # If client creation failed or chat failed, try API fallback
-        ensure_model_exists(model, api_url=api_url)
-
-    try:
-        headers = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json" if json_mode else None,
-            "options": {"temperature": 0, "num_ctx": 32768},
-        }
-        endpoint = api_url.rstrip("/")
-        if not endpoint.endswith("/api/generate"):
-            endpoint = f"{endpoint}/api/generate"
-
-        resp = requests.post(endpoint, json=payload, headers=headers, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("response", "")
-    except Exception as e:
-        print(f"Ollama Requests Fallback Error: {e}")
-        return ""
+def ensure_model_exists(model: str, client: Any = None, api_url: str = None):
+    """Compatibility wrapper for ensuring model exists."""
+    # If called with legacy arguments, we still try to use the singleton if possible
+    OllamaClient().ensure_model_exists(model)
 
 
-__all__ = ["run_ai"]
+__all__ = ["run_ai", "OllamaClient", "ensure_ollama_server_running", "ensure_model_exists"]
+

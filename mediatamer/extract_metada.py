@@ -17,45 +17,53 @@ def extract_all_metadata(
     """Perform all extractions and populate the provided metadata object."""
 
     # Check if the cache contains the metadata
-    meta = None
     if not no_cache:
-        meta = load_metadata(metadata.path)
-        metadata = meta
+        cached_meta = load_metadata(metadata.path)
+        if cached_meta:
+            metadata = cached_meta
 
     # 1. Technical
-    if meta.technical is None:
+    if metadata.technical is None:
         print("Extracting technical metadata...")
         TechnicalSignals.from_metadata(metadata)
+        save_metadata(metadata)
 
     # 2. GuessIt
-    if meta.guessit is None:
+    if metadata.guessit is None or not metadata.guessit:
         print("Extracting guessit metadata...")
         infer_context_from_path(metadata)
+        save_metadata(metadata)
 
     # 2.5 OpenSubtitles
-    if meta.opensubtitles is None:
+    if metadata.opensubtitles is None or not metadata.opensubtitles:
         print("Extracting opensubtitles metadata...")
         try:
             OpenSubtitleSignals(metadata, config).extract()
+            save_metadata(metadata)
         except Exception as e:
             print(f"Failed to extract OpenSubtitles metadata: {e}")
 
     # 3. Subtitles
-    if meta.subtitles is None:
+    if metadata.subtitles is None:
         print("Extracting subtitle metadata...")
         SubtitleSignals(metadata, config).extract()
+        save_metadata(metadata)
 
     # 4 Credits
-    print("Extracting credits metadata...")
-    VideoCreditsExtractor(config).extract(metadata)
+    if metadata.cast_profile is None or not metadata.cast_profile:
+        print("Extracting credits metadata...")
+        VideoCreditsExtractor(config).extract(metadata)
+        save_metadata(metadata)
 
     # 5. Summary from subtitles
-    print("Extracting summary from subtitles...")
-    extract_summary_from_subtitles(metadata, config)
+    if metadata.summary is None or not metadata.summary:
+        print("Extracting summary from subtitles...")
+        extract_summary_from_subtitles(metadata, config)
+        save_metadata(metadata)
 
     # 6. AI Episode Matcher
     print("Extracting AI episode matcher metadata...")
-    match_episode(metadata)
+    match_episode(metadata, config)
 
     # Dump the found metada
     print("Saving metadata...")

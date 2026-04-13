@@ -1,6 +1,6 @@
 import json
 import inspect
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from mediatamer.config import load_config
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, fetch_tmdb_person_credits
 from mediatamer.signals.tvdb import fetch_tvdb_info
@@ -9,9 +9,9 @@ from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.signals.scoring import score_episode_match
 
 
-def match_episode(meta: VideoMetadata) -> None:
+def match_episode(meta: VideoMetadata, config: dict) -> None:
     matcher = AIVideoMatcher()
-    matcher.match(meta)
+    matcher.match(meta, config)
 
 
 class AIVideoMatcher:
@@ -20,7 +20,11 @@ class AIVideoMatcher:
         self.tmdb_api_key = self.config.get("tmbd-api-key")
         self.tvdb_api_key = self.config.get("tvdb-api-key")
 
-    def match(self, meta: VideoMetadata) -> None:
+    def match(self, meta: VideoMetadata, config: dict) -> None:
+        self.config = config
+        self.tmdb_api_key = self.config.get("tmbd-api-key")
+        self.tvdb_api_key = self.config.get("tvdb-api-key")
+
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
         sub_text = meta.subtitles or ""
         search_history = []
@@ -34,7 +38,7 @@ class AIVideoMatcher:
             prompt = self._build_agentic_prompt(meta, search_history)
 
             # Note: We must ensure JSON format from the AI.
-            response = run_ai(prompt, json_mode=True)
+            response = run_ai(prompt, config, json_mode=True)
 
             try:
                 action = json.loads(response)
@@ -77,7 +81,7 @@ class AIVideoMatcher:
                         meta.technical,
                         sub_text=sub_text,
                         context_hints={
-                            "is_likely_episode": True,
+                            "is_likely_episode": meta.heuristics.get("is_episode"),
                             "season_number": season,
                         },
                     )
@@ -121,7 +125,8 @@ class AIVideoMatcher:
 
                 print(f"  -> Executing {len(queries)} queries...")
                 print(f"  -> Queries: {queries}")
-                history_entry = self._execute_search_queries(queries)
+                target_dur = meta.technical.duration if meta.technical else None
+                history_entry = self._execute_search_queries(queries, target_dur)
                 search_history.extend(history_entry)
 
             else:
@@ -189,7 +194,7 @@ class AIVideoMatcher:
             return 0
 
     def _execute_search_queries(
-        self, queries: List[Dict[str, Any]]
+        self, queries: List[Dict[str, Any]], target_duration_sec: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         results = []
         for q in queries:
@@ -202,8 +207,13 @@ class AIVideoMatcher:
                 print(f"     Fetching TMDB for Person '{name}'")
                 credits = fetch_tmdb_person_credits(name, self.tmdb_api_key)
 
-                # Keep top 15 to avoid huge context
-                filtered_credits = credits[:15]
+                # Keep top 15 to avoid huge context, truncate overviews
+                filtered_credits = []
+                for cr in credits[:15]:
+                    ov = cr.get("overview", "")
+                    cr["overview"] = (ov[:200] + "...") if len(ov) > 200 else ov
+                    filtered_credits.append(cr)
+
                 results.append(
                     {
                         "query": {"type": "SEARCH_PERSON", "name": name},
@@ -224,16 +234,26 @@ class AIVideoMatcher:
             # Fetch TVDB (which user redirected to API basically)
             _, tvdb_eps = fetch_tvdb_info(sh, se, self.tvdb_api_key)
 
-            # Combine distinct
+            # Combine distinct, truncate overviews, and filter by duration
             combined_hash = {}
             for ep in tmdb_eps + tvdb_eps:
                 ep_id = ep.get("episode_number")
                 if ep_id and ep_id not in combined_hash:
+                    # Duration check (tolerance: +/- 15 mins)
+                    ep_dur_min = ep.get("runtime")
+                    if target_duration_sec and ep_dur_min:
+                        diff = abs((ep_dur_min * 60) - target_duration_sec)
+                        if diff > 900:  # 15 minutes
+                            # Skip if duration mismatch is too large, unless it's the only hit
+                            if len(tmdb_eps + tvdb_eps) > 1:
+                                continue
+
+                    ov = ep.get("overview", "")
                     combined_hash[ep_id] = {
                         "episode_number": ep_id,
                         "name": ep.get("name"),
-                        "overview": ep.get("overview"),
-                        "runtime_min": ep.get("runtime"),
+                        "overview": (ov[:200] + "...") if len(ov) > 200 else ov,
+                        "runtime_min": ep_dur_min,
                         "guest_stars": [
                             g.get("name") for g in ep.get("guest_stars", [])[:3]
                         ],
@@ -258,46 +278,71 @@ class AIVideoMatcher:
         Builds a structured, agentic prompt for the AI Video Matcher.
         Using inspect.cleandoc to ensure clean formatting without leading whitespace.
         """
-        # 1. Identity and Core Instructions
-        identity = inspect.cleandoc("""
+        # 1. Identity
+        identity = """
             # IDENTITY
             You are an Autonomous Media Identification Agent. Your goal is to identify the EXACT TV show, season, and episode 
             for the provided video file. You operate in an iterative loop, using results from previous database searches 
-             to refine your identification.
-        """)
+            to refine your identification.
+        """
 
         # 2. File and Technical Evidence
-        # We include the full path because it often contains a parent folder named after the show.
-        evidence_data = {
-            "full_path": str(meta.path),
-            "filename": meta.path.name,
-            "duration_sec": meta.technical.duration if meta.technical else None,
-            "heuristics_guess": meta.heuristics,
-            "guessit_analysis": meta.guessit,
-            "ai_filename_guess": meta.ai_guess,
-            "opensubtitles_match": meta.opensubtitles
-        }
+        # Restore compact hints from heuristics and guessit
+        likely_show = next(
+            (
+                v
+                for v in [
+                    meta.heuristics.get("show"),
+                    meta.guessit.get("show"),
+                    meta.ai_guess.get("show"),
+                ]
+                if v
+            ),
+            None,
+        )
+        likely_season = next(
+            (
+                v
+                for v in [
+                    meta.heuristics.get("season"),
+                    meta.guessit.get("season"),
+                    meta.ai_guess.get("season"),
+                ]
+                if v
+            ),
+            None,
+        )
 
-        evidence_file = inspect.cleandoc(f"""
+        likely_metadata = {
+            "likely_show": likely_show,
+            "likely_season": likely_season,
+            "duration_sec": meta.technical.duration if meta.technical else None,
+            "full_path": str(meta.path),
+        }
+        evidence_file = f"""
             ## EVIDENCE: FILE SYSTEM & TECHNICAL
-            {json.dumps(evidence_data, indent=2)}
-        """)
+            {json.dumps(likely_metadata, indent=2)}
+        """
 
         # 3. Content-based Evidence (Subtitles & Cast)
         # Summary and cast profiles are high-confidence signals extracted from the video content itself.
-        summary_content = meta.summary.get("summary", "No summary available.") if isinstance(meta.summary, dict) else str(meta.summary)
-        
-        evidence_content = inspect.cleandoc(f"""
+        summary_content = (
+            meta.summary.get("summary", "No summary available.")
+            if isinstance(meta.summary, dict)
+            else str(meta.summary)
+        )
+
+        evidence_content = f"""
             ## EVIDENCE: CONTENT ANALYSIS
             ### SUBTITLE SUMMARY
             {summary_content}
 
             ### CAST PROFILE
-            {json.dumps(meta.cast_profile, indent=2)}
-        """)
+            {json.dumps(meta.cast_profile.to_dict() if hasattr(meta.cast_profile, "to_dict") else meta.cast_profile, indent=2)}
+        """
 
         # 4. Search Commands
-        commands = inspect.cleandoc("""
+        commands = """
             ## AVAILABLE SEARCH COMMANDS
             To gather more information, return a JSON object with status "SEARCHING".
             
@@ -308,31 +353,35 @@ class AIVideoMatcher:
             2. **SEARCH_PERSON**: Look up actor/crew credits. 
                - Use names from the Cast Profile to disambiguate similar titles.
                - Example: {"type": "SEARCH_PERSON", "name": "Bryan Cranston"}
-        """)
+        """
 
         # 5. Output Format
-        output_format = inspect.cleandoc("""
+        output_format = """
             ## OUTPUT FORMAT
             - Return ONLY valid JSON.
-            - Provide a "reasoning" field explaining your strategy.
-            - If found: { "status": "FOUND", "show": "...", "season": X, "episode": Y, "title": "...", "confidence_score": 0-100 }
-            - If searching: { "status": "SEARCHING", "queries": [...] }
-        """)
+            - If found: { "status": "FOUND", "reasoning": "...", "show": "...", "season": X, "episode": Y, "title": "...", "confidence_score": 0-100 }
+            - If searching: { "status": "SEARCHING", "reasoning": "...", "queries": [...] }
+        """
 
         # 6. History
-        history_section = inspect.cleandoc(f"""
+        # If iterations exceed a certain threshold, we prune older history to save tokens.
+        # Keeping only the most recent 2 searches provides context without context-window bloat.
+        pruned_history = (
+            search_history[-2:] if len(search_history) > 2 else search_history
+        )
+        history_section = f"""
             ## PREVIOUS SEARCH RESULTS
-            {json.dumps(search_history, indent=2) if search_history else "No searches performed yet."}
-        """)
+            {json.dumps(pruned_history, indent=2) if pruned_history else "No searches performed yet."}
+        """
 
-        # Assemble final prompt
-        prompt = "\n\n".join([
+        # Assemble final prompt and apply cleandoc ONCE at the end
+        full_sections = [
             identity,
             evidence_file,
             evidence_content,
             commands,
             output_format,
-            history_section
-        ])
-
+            history_section,
+        ]
+        prompt = inspect.cleandoc("\n\n".join(full_sections))
         return prompt

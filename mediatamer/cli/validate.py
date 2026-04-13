@@ -128,7 +128,7 @@ def check_ollama(config: dict) -> bool:
         ensure_ollama_server_running(config)
 
         # Verify that the model path is correct using ollama cli
-        res = run_ai("Return exactly 'true' and nothing else.", False)
+        res = run_ai("Return exactly 'true' and nothing else.", config, False)
         if "true" in res.lower() or res == "true":
             print_result("Ollama AI", True, "Successfully connected to Ollama API.")
             return True

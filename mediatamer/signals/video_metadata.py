@@ -35,7 +35,9 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
         "subtitles": metadata.subtitles,
         "ai_match": metadata.ai_match,
         "opensubtitles": metadata.opensubtitles,
-        "cast_profile": metadata.cast_profile,
+        "cast_profile": metadata.cast_profile.to_dict()
+        if hasattr(metadata.cast_profile, "to_dict")
+        else metadata.cast_profile,
         "summary": metadata.summary,
     }
 

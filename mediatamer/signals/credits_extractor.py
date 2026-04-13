@@ -172,7 +172,7 @@ No extra text, no markdown.
 ### RAW OCR TEXT:
 {snip}
 """
-        response = run_ai(prompt, json_mode=True)
+        response = run_ai(prompt, self.config, json_mode=True)
         try:
             data = json.loads(response)
             return CastProfile.from_dict(data)
