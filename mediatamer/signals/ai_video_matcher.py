@@ -355,6 +355,12 @@ class AIVideoMatcher:
                - Example: {"type": "SEARCH_PERSON", "name": "Bryan Cranston"}
         """
 
+        tips_and_tricks = f"""
+            ## TIPS AND TRICKS
+            - If show is "Doctor Who", query "Christmas Specials" and {likely_season} seasons.
+            - If the file name is of similar to B1_t00.mkv it means the video is extracted by makemkv. Hence episode name is unknown.
+        """
+
         # 5. Output Format
         output_format = """
             ## OUTPUT FORMAT
@@ -380,6 +386,7 @@ class AIVideoMatcher:
             evidence_file,
             evidence_content,
             commands,
+            tips_and_tricks,
             output_format,
             history_section,
         ]

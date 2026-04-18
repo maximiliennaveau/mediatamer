@@ -1,7 +1,7 @@
 import time
-import sys
 from mediatamer.ai import run_ai
 from mediatamer.config import load_config
+
 
 def verify_ai_performance():
     config = load_config()
@@ -28,6 +28,7 @@ def verify_ai_performance():
     end = time.time()
     print(f"Response: {resp3}")
     print(f"Time taken: {end - start:.2f}s")
+
 
 if __name__ == "__main__":
     verify_ai_performance()
