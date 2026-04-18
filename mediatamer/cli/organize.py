@@ -61,7 +61,7 @@ def main():
     from mediatamer.config import load_config
 
     config = load_config()
-    tmdb_key = args.tmdb_api_key or config.get("tmbd-api-key")
+    tmdb_key = args.tmdb_api_key or config.get("tmdb-api-key")
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()

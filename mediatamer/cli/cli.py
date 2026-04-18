@@ -45,7 +45,7 @@ def create_parser(config: dict[str, Any] | None = None):
     )
     organize_parser = get_organize_parser(organize_parser)
     if config:
-        organize_parser.set_defaults(tmdb_api_key=config.get("tmbd-api-key"))
+        organize_parser.set_defaults(tmdb_api_key=config.get("tmdb-api-key"))
 
     # Compress command
     compress_parser = subparsers.add_parser(

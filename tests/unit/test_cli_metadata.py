@@ -16,7 +16,7 @@ class TestMetadataCLI(unittest.TestCase):
     @patch("pathlib.Path.rglob")
     def test_cli_ai_flag(self, mock_rglob, mock_check, mock_load, mock_ai_class):
         # Setup mocks
-        mock_load.return_value = {"tmbd-api-key": "fake_key"}
+        mock_load.return_value = {"tmdb-api-key": "fake_key"}
 
         mock_file = MagicMock(spec=Path)
         mock_file.suffix = ".mkv"

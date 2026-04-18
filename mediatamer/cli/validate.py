@@ -26,12 +26,12 @@ def print_result(name: str, success: bool, message: str = ""):
 
 
 def check_tmdb(config: dict) -> bool:
-    api_key = config.get("tmbd-api-key") or config.get("tmdb-api-key")
+    api_key = config.get("tmdb-api-key") or config.get("tmdb-api-key")
     if not api_key:
         print_result(
             "TMDB",
             False,
-            "Missing API key in config ('tmbd-api-key' or 'tmdb-api-key').",
+            "Missing API key in config ('tmdb-api-key' or 'tmdb-api-key').",
         )
         return False
 
@@ -71,7 +71,7 @@ def check_tmdb(config: dict) -> bool:
 def check_tvdb(config: dict) -> bool:
     api_key = (
         config.get("tvdb-api-key")
-        or config.get("tmbd-api-key")
+        or config.get("tmdb-api-key")
         or config.get("tmdb-api-key")
         or ""
     )

@@ -17,12 +17,12 @@ def match_episode(meta: VideoMetadata, config: dict) -> None:
 class AIVideoMatcher:
     def __init__(self):
         self.config = load_config()
-        self.tmdb_api_key = self.config.get("tmbd-api-key")
+        self.tmdb_api_key = self.config.get("tmdb-api-key")
         self.tvdb_api_key = self.config.get("tvdb-api-key")
 
     def match(self, meta: VideoMetadata, config: dict) -> None:
         self.config = config
-        self.tmdb_api_key = self.config.get("tmbd-api-key")
+        self.tmdb_api_key = self.config.get("tmdb-api-key")
         self.tvdb_api_key = self.config.get("tvdb-api-key")
 
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
