@@ -39,6 +39,7 @@ def extract_all_metadata(
     print(f"  OpenSubtitles: {'Yes' if metadata.opensubtitles else 'No'}")
     print(f"  Cast Profile: {'Yes' if metadata.cast_profile else 'No'}")
     print(f"  Summary: {'Yes' if metadata.summary else 'No'}")
+    print(f"  OVDB: {'Yes' if metadata.ovdb else 'No'}")
 
     # Technical
     if not metadata.technical:
@@ -49,7 +50,7 @@ def extract_all_metadata(
     # GuessIt
     if not metadata.guessit:
         print("Extracting guessit metadata...")
-        infer_context_from_path(metadata)
+        infer_context_from_path(metadata, config)
         save_metadata(metadata)
 
     # 2.5 OpenSubtitles
