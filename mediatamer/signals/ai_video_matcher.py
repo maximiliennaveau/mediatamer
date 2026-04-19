@@ -319,6 +319,27 @@ class AIVideoMatcher:
             "duration_sec": meta.technical.duration if meta.technical else None,
             "full_path": str(meta.path),
         }
+
+        # Enrich with disc-level estimates when available
+        disc = (meta.heuristics or {}).get("disc_analysis")
+        if disc:
+            likely_metadata["is_makemkv_rip"] = True
+            likely_metadata["dvd_number"] = disc.get("dvd_number")
+            likely_metadata["total_discs_in_season"] = disc.get("total_discs_found")
+            likely_metadata["file_role"] = (
+                "main_episode" if disc.get("is_episode") else "bonus_or_special"
+            )
+            if disc.get("estimated_episode_number") is not None:
+                likely_metadata["estimated_episode"] = disc["estimated_episode_number"]
+                likely_metadata["estimated_episode_range_this_disc"] = disc.get(
+                    "estimated_episode_range"
+                )
+                likely_metadata["episode_offset_confidence"] = (
+                    "high (all prior discs found)"
+                    if disc.get("offset_is_exact")
+                    else "medium (some prior discs missing)"
+                )
+
         evidence_file = f"""
             ## EVIDENCE: FILE SYSTEM & TECHNICAL
             {json.dumps(likely_metadata, indent=2)}
@@ -341,7 +362,61 @@ class AIVideoMatcher:
             {json.dumps(meta.cast_profile.to_dict() if hasattr(meta.cast_profile, "to_dict") else meta.cast_profile, indent=2)}
         """
 
-        # 4. Search Commands
+        # 4. Disc analysis narrative block (MakeMKV rips only)
+        disc_section = ""
+        if disc:
+            ep_letter = disc.get("episode_letter", "?")
+            this_letter = disc.get("this_letter", "?")
+            is_ep = disc.get("is_episode", False)
+            disc_pos = disc.get("disc_position")
+            disc_ep_count = disc.get("disc_episode_count", 0)
+            disc_bonus_count = disc.get("disc_bonus_count", 0)
+            dvd_num = disc.get("dvd_number", "?")
+            total_discs = disc.get("total_discs_found", "?")
+            ep_num = disc.get("estimated_episode_number")
+            ep_range = disc.get("estimated_episode_range", [])
+            prior_dvds = disc.get("prior_dvds_analyzed", [])
+            offset = disc.get("episode_offset", 0)
+            offset_exact = disc.get("offset_is_exact", False)
+
+            role_line = (
+                f"MAIN EPISODE — position {disc_pos} of {disc_ep_count} "
+                f"(letter group '{this_letter}' = episode group '{ep_letter}')"
+                if is_ep
+                else f"BONUS / SPECIAL — letter group '{this_letter}' "
+                f"(episode group is '{ep_letter}', bonus groups: "
+                f"{disc.get('bonus_letters')})"
+            )
+
+            offset_note = (
+                f"exact (discs {prior_dvds} counted)"
+                if offset_exact
+                else f"estimated (only discs {prior_dvds} found of {list(range(1, dvd_num if isinstance(dvd_num, int) else 1))})"
+            )
+
+            ep_estimate_block = ""
+            if is_ep and ep_num is not None:
+                ep_estimate_block = (
+                    f"\n            ESTIMATED SEASON EPISODE : {ep_num} ({offset_note})"
+                    f"\n            EPISODE RANGE ON THIS DISC: {ep_range}"
+                    f"\n            → Primary search target: {likely_show or '?'} "
+                    f"S{likely_season or '?'}E{ep_num}"
+                )
+            elif not is_ep:
+                ep_estimate_block = (
+                    "\n            → This is a BONUS file. "
+                    "Search under Season 0 (Specials) first."
+                )
+
+            disc_section = f"""
+            ## EVIDENCE: DVD DISC ANALYSIS (MakeMKV rip)
+            DISC         : {dvd_num} of ~{total_discs} discs (Season {disc.get('folder_season', likely_season)})
+            FILE ROLE    : {role_line}
+            DISC CONTENTS: {disc_ep_count} main episode(s), {disc_bonus_count} bonus item(s)
+            EPISODE OFFSET FROM PRIOR DISCS: {offset}{ep_estimate_block}
+            """
+
+        # 5. Search Commands
         commands = """
             ## AVAILABLE SEARCH COMMANDS
             To gather more information, return a JSON object with status "SEARCHING".
@@ -358,10 +433,11 @@ class AIVideoMatcher:
         tips_and_tricks = f"""
             ## TIPS AND TRICKS
             - If show is "Doctor Who", query "Christmas Specials" and {likely_season} seasons.
-            - If the file name is of similar to B1_t00.mkv it means the video is extracted by makemkv. Hence episode name is unknown.
+            - If the file name is similar to B1_t00.mkv it means the video was extracted by MakeMKV from a DVD. The episode name is unknown — rely on disc analysis above and subtitle/cast evidence.
+            - For MakeMKV bonus files (is_bonus=True), check Season 0 / Specials on TMDB.
         """
 
-        # 5. Output Format
+        # 6. Output Format
         output_format = """
             ## OUTPUT FORMAT
             - Return ONLY valid JSON.
@@ -369,7 +445,7 @@ class AIVideoMatcher:
             - If searching: { "status": "SEARCHING", "reasoning": "...", "queries": [...] }
         """
 
-        # 6. History
+        # 7. History
         # If iterations exceed a certain threshold, we prune older history to save tokens.
         # Keeping only the most recent 2 searches provides context without context-window bloat.
         pruned_history = (
@@ -385,6 +461,10 @@ class AIVideoMatcher:
             identity,
             evidence_file,
             evidence_content,
+        ]
+        if disc_section:
+            full_sections.append(disc_section)
+        full_sections += [
             commands,
             tips_and_tricks,
             output_format,

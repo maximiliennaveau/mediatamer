@@ -78,9 +78,10 @@ def extract_summary_from_subtitles(metadata: "VideoMetadata", config: dict) -> D
     json_response = run_ai(prompt, config, json_mode=True)
     try:
         response = json.loads(json_response)
-
     except Exception as e:
-        raise ValueError(f"[Summary Extractor] Error parsing LLM JSON: {e}")
+        print(f"[Summary Extractor] Error parsing LLM JSON: {e}")
+        metadata.summary = {}
+        return {}
 
     metadata.summary = {
         "summary": response["summary"],

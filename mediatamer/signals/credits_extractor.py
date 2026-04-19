@@ -14,7 +14,7 @@ except ImportError:
 
 from mediatamer.ai import run_ai
 from mediatamer.signals.video_metadata import VideoMetadata
-from mediatamer.signals.cast_from_subtitles import CastProfile
+from mediatamer.signals.cast_from_subtitles import CastProfile, _build_cast_prompt
 
 
 class VideoCreditsExtractor:
@@ -58,7 +58,11 @@ class VideoCreditsExtractor:
         if not raw_text.strip():
             return CastProfile()
 
-        meta.cast_profile = self._refine_with_ai(raw_text)
+        filtered_text = self._filter_ocr_text(raw_text)
+        if not filtered_text.strip():
+            return CastProfile()
+
+        meta.cast_profile = self._refine_with_ai(filtered_text)
         return meta.cast_profile
 
     def _extract_text_from_frames(
@@ -119,59 +123,33 @@ class VideoCreditsExtractor:
 
         return "\n---\n".join(all_text)
 
+    def _filter_ocr_text(self, text: str) -> str:
+        """Filter noise from raw OCR output (short lines, digit-only lines, duplicates)."""
+        seen_previous = None
+        cleaned: List[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if len(stripped) < 3:
+                continue
+            alpha_chars = [c for c in stripped if c.isalpha()]
+            if len(alpha_chars) < len(stripped) * 0.4:
+                continue
+            non_ascii = [c for c in stripped if ord(c) > 127]
+            if len(non_ascii) > len(stripped) * 0.4:
+                continue
+            if stripped == seen_previous:
+                continue
+            cleaned.append(stripped)
+            seen_previous = stripped
+        return "\n".join(cleaned)
+
     def _refine_with_ai(self, raw_text: str) -> CastProfile:
         """
         Use the LLM to clean up the noisy OCR text into a structured profile.
         """
         # Limit input to avoid token overflow
         snip = raw_text[:8000] if len(raw_text) > 8000 else raw_text
-
-        prompt = f"""
-You are a media credits parser. Your job is to classify names from raw OCR text extracted from video credits.
-
-STRICT CLASSIFICATION RULES — read carefully before assigning any name:
-
-1. fictional_characters:
-   - ONLY names of story characters that appear in the narrative (e.g. "Walter White", "Sherlock Holmes", "Sintel").
-   - Do NOT include real person names here, even if they appear alongside character names.
-   - Do NOT include production company names, sponsors, or technology/brand names (e.g. "DivX", "Dolby" are NOT characters).
-
-2. real_actors:
-   - ONLY real human beings who perform in the show/film (voice actors accepted).
-   - These are the people listed next to character names, or in the cast section.
-   - Do NOT include directors, editors, composers, or other crew here.
-   - Do NOT include organization names (e.g. "Blender Foundation" is NOT an actor).
-
-3. crew_names:
-   - Real individual HUMAN BEINGS who worked behind the camera: directors, producers, composers, writers, editors, cinematographers.
-   - Do NOT include company or organization names here.
-   - If you are unsure whether a name belongs in real_actors or crew_names, prefer crew_names.
-
-4. producers_and_funders:
-   - Names of production companies, studios, foundations, funds, or sponsors that provided financial or production support.
-   - These are ORGANIZATIONS, not people (e.g. "Blender Foundation", "Netherlands Film Fund").
-
-5. show_name_hints:
-   - The primary display title of the show or film (e.g. "Sintel", "Doctor Who").
-   - Do NOT use project codenames, subtitles, or descriptions (e.g. "The Durian Open Movie Project" is a codename, NOT a title).
-   - Return a list of strings.
-
-6. confidence: integer 0-100 reflecting your overall confidence in the extraction quality.
-
-IMPORTANT DISAMBIGUATION TIPS:
-- Brand names (DivX, Dolby, IMAX, etc.) are NEVER people — omit them from all person fields.
-- A name appearing on its own line, in ALL CAPS, as the only text, is more likely a title than a character.
-- Names preceded by "PRESENTS", "FOUNDATION", "INSTITUTE", "FUND", "PROJECT" are organizations.
-- Names preceded by "DIRECTED BY", "MUSIC BY", "EDITED BY", "PRODUCED BY" are individual crew members.
-- Names appearing between dashes (e.g. "ALICE SMITH - BOB JONES") are typically cast or crew pairs.
-
-Return ONLY a valid JSON object with exactly these keys:
-fictional_characters, real_actors, crew_names, producers_and_funders, show_name_hints, confidence.
-No extra text, no markdown.
-
-### RAW OCR TEXT:
-{snip}
-"""
+        prompt = _build_cast_prompt(snip)
         response = run_ai(prompt, self.config, json_mode=True)
         try:
             data = json.loads(response)

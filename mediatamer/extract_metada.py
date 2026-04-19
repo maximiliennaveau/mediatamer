@@ -62,8 +62,11 @@ def extract_all_metadata(
         save_metadata(metadata)
 
     # 6. AI Episode Matcher
-    print("Extracting AI episode matcher metadata...")
-    match_episode(metadata, config)
+    if not metadata.ai_match:
+        print("Extracting AI episode matcher metadata...")
+        match_episode(metadata, config)
+    else:
+        print("AI episode matcher metadata already cached, skipping.")
 
     # Dump the found metada
     print("Saving metadata...")

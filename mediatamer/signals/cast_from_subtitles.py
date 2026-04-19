@@ -50,8 +50,19 @@ def extract_cast_from_subtitles(subtitle_text: str, config: dict) -> CastProfile
     if not subtitle_text or not subtitle_text.strip():
         return CastProfile()
 
-    prompt = f"""
-You are a media credits parser. Your job is to classify names from raw OCR text extracted from video credits.
+    prompt = _build_cast_prompt(subtitle_text)
+    response = run_ai(prompt, config, json_mode=True)
+    try:
+        data = json.loads(response)
+        return CastProfile.from_dict(data)
+    except Exception as e:
+        print(f"[Cast Extractor] Error parsing LLM JSON: {e}")
+        return CastProfile()
+
+
+def _build_cast_prompt(text: str) -> str:
+    """Build the shared LLM prompt for cast/crew classification."""
+    return f"""You are a media credits parser. Your job is to classify names from raw OCR text extracted from video credits.
 
 STRICT CLASSIFICATION RULES — read carefully before assigning any name:
 
@@ -94,13 +105,5 @@ fictional_characters, real_actors, crew_names, producers_and_funders, show_name_
 No extra text, no markdown.
 
 ### RAW OCR TEXT:
-{subtitle_text}
+{text}
 """
-
-    response = run_ai(prompt, config, json_mode=True)
-    try:
-        data = json.loads(response)
-        return CastProfile.from_dict(data)
-    except Exception as e:
-        print(f"[Cast Extractor] Error parsing LLM JSON: {e}")
-        return CastProfile()

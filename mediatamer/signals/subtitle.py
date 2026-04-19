@@ -237,12 +237,34 @@ class SubtitleSignals:
                 except Exception:
                     continue
 
-        return "\n".join(text_content)
+        return self._filter_ocr_text("\n".join(text_content))
 
     def _filter_ocr_text(self, text: str) -> str:
-        """Filter out noise from OCR text."""
-        # TODO implement
-        pass
+        """Filter noise from raw OCR output.
+
+        Removes:
+        - Lines shorter than 3 characters (stray glyphs)
+        - Lines that are mostly digits or punctuation (timecodes, page numbers)
+        - Lines where more than 40% of characters are non-ASCII (encoding artefacts)
+        - Consecutive duplicate lines (repeated static frames)
+        """
+        seen_previous = None
+        cleaned: List[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if len(stripped) < 3:
+                continue
+            alpha_chars = [c for c in stripped if c.isalpha()]
+            if len(alpha_chars) < len(stripped) * 0.4:
+                continue
+            non_ascii = [c for c in stripped if ord(c) > 127]
+            if len(non_ascii) > len(stripped) * 0.4:
+                continue
+            if stripped == seen_previous:
+                continue
+            cleaned.append(stripped)
+            seen_previous = stripped
+        return "\n".join(cleaned)
 
 
 __all__ = [
