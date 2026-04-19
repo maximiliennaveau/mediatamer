@@ -19,7 +19,8 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract metadata from videos.")
+    parser = argparse.ArgumentParser(
+        description="Extract metadata from videos.")
     parser = get_agument_parser(parser)
     args = parser.parse_args()
 
@@ -36,7 +37,7 @@ def main():
             meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
             metadata_list[str(f)] = metadata_to_dict(meta)
         except Exception as e:
-            print(f"Error extracting metadata for {f}: {e}")
+            print(f"Error extracting metadata for {f}:\n{e}")
             continue
 
         print(f"Extracted metadata for {f}:")

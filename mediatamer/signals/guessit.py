@@ -1,10 +1,8 @@
 import guessit
 import re
-import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from mediatamer.ai import run_ai
 from mediatamer.utils import normalize_show_name
 from mediatamer.signals.video_metadata import VideoMetadata
 
@@ -62,6 +60,8 @@ def _scan_letter_groups(folder: Path) -> Dict[str, List[Dict[str, Any]]]:
     Returns a dict mapping letter -> list of track dicts.
     """
     groups: Dict[str, List[Dict[str, Any]]] = {}
+    if not folder.is_dir():
+        return groups
     for f in folder.iterdir():
         if not f.is_file() or f.suffix.lower() not in _VIDEO_EXTS:
             continue
@@ -73,7 +73,7 @@ def _scan_letter_groups(folder: Path) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _episode_letter_from_groups(
-    letter_groups: Dict[str, List[Dict[str, Any]]]
+    letter_groups: Dict[str, List[Dict[str, Any]]],
 ) -> Optional[str]:
     """Return the letter group that represents main episodes.
 
@@ -177,14 +177,10 @@ def _analyze_disc_context(video_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
     episode_letter = _episode_letter_from_groups(letter_groups)
-    bonus_letters = sorted(
-        grp for grp in letter_groups if grp != episode_letter
-    )
+    bonus_letters = sorted(grp for grp in letter_groups if grp != episode_letter)
 
     disc_episode_count = len(letter_groups[episode_letter])
-    disc_bonus_count = sum(
-        len(letter_groups[grp]) for grp in bonus_letters
-    )
+    disc_bonus_count = sum(len(letter_groups[grp]) for grp in bonus_letters)
 
     is_episode = this_letter == episode_letter
     is_bonus = not is_episode
@@ -257,10 +253,7 @@ def _analyze_disc_context(video_path: Path) -> Optional[Dict[str, Any]]:
     }
 
 
-# ── Main extraction functions ─────────────────────────────────────────────────
-
-
-def extract_guessit(metadata: VideoMetadata) -> None:
+def _extract_guessit(metadata: VideoMetadata) -> None:
     """Pure guessit extraction.
 
     When the filename matches the MakeMKV output pattern (e.g. B2_t04.mkv),
@@ -270,7 +263,12 @@ def extract_guessit(metadata: VideoMetadata) -> None:
     is_makemkv = _is_makemkv_filename(metadata.path.name)
 
     if is_makemkv:
-        metadata.guessit = {
+        print(
+            f"[GuessIt] Detected MakeMKV pattern in filename '{metadata.path.name}', "
+            "skipping call to guessit using heuristics instead."
+        )
+        metadata.guessit["is_makemkv"] = True
+        metadata.guessit["guessit"] = {
             "show": None,
             "season": None,
             "episode": None,
@@ -283,33 +281,24 @@ def extract_guessit(metadata: VideoMetadata) -> None:
         }
         return
 
-    gi_file = guessit.guessit(metadata.path.name)
-    metadata.guessit = {
-        "show": normalize_show_name(gi_file.get("series") or gi_file.get("title"))
-        if (gi_file.get("series") or gi_file.get("title"))
-        else None,
-        "season": _to_int(gi_file.get("season")),
-        "episode": _to_int(
-            gi_file.get("episode") or gi_file.get("episode_number")
-        ),
-        "dvd": _to_int(gi_file.get("disc")),
-        "part": _to_int(gi_file.get("part")),
-        "title": gi_file.get("episode_title"),
-        "type": "movie"
-        if (
-            _to_int(gi_file.get("season")) is None
-            and _to_int(
-                gi_file.get("episode") or gi_file.get("episode_number")
-            )
-            is None
-        )
-        else "episode",
-        "is_makemkv": False,
-        "raw": gi_file,
+    gi = guessit.guessit(metadata.path.name)
+    show = gi.get("series") or gi.get("title")
+    season = _to_int(gi.get("season"))
+    episode = _to_int(gi.get("episode") or gi.get("episode_number"))
+    metadata.guessit["is_makemkv"] = False
+    metadata.guessit["guessit"] = {
+        "show": normalize_show_name(show) if show else None,
+        "season": season,
+        "episode": episode,
+        "dvd": _to_int(gi.get("disc")),
+        "part": _to_int(gi.get("part")),
+        "title": gi.get("episode_title"),
+        "type": "movie" if season is None and episode is None else "episode",
+        "raw": gi,
     }
 
 
-def extract_heuristics(metadata: VideoMetadata) -> None:
+def _extract_heuristics(metadata: VideoMetadata) -> None:
     """Heuristics analysis based on path walking and, for MakeMKV rips, disc
     structure analysis.
 
@@ -320,20 +309,19 @@ def extract_heuristics(metadata: VideoMetadata) -> None:
     context is recovered from the folder name (show, season, DVD number) and from
     sibling-folder counting to estimate the season episode number.
     """
-    is_makemkv = metadata.guessit.get("is_makemkv", False)
+    is_makemkv = metadata.guessit.get("is_makemkv")
 
     # Seed from guessit for well-named files; MakeMKV filenames carry no signal.
-    g = {} if is_makemkv else metadata.guessit
+    g = {} if is_makemkv else metadata.guessit.get("guessit", {})
     first_guess: Dict[str, Any] = {
-        "show": g.get("show"),
-        "season": g.get("season"),
-        "episode": g.get("episode"),
-        "dvd": g.get("dvd"),
-        "part": g.get("part"),
-        "title": g.get("title"),
+        "show": g.get("show", "unknown"),
+        "season": g.get("season", "unknown"),
+        "episode": g.get("episode", "unknown"),
+        "dvd": g.get("dvd", "unknown"),
+        "part": g.get("part", "unknown"),
+        "title": g.get("title", "unknown"),
         "type": g.get("type", "unknown"),
         "file_list": [str(f) for f in metadata.path.parent.glob("*")],
-        "is_makemkv": is_makemkv,
     }
 
     # ── Path-walking for show name, season, and DVD number ───────────────────
@@ -371,21 +359,20 @@ def extract_heuristics(metadata: VideoMetadata) -> None:
 
     # For well-named files: filename series takes priority over path-derived one
     if not is_makemkv:
-        f_series = metadata.guessit.get("raw", {}).get("series")
+        f_series = metadata.guessit["guessit"].get("raw", {}).get("series")
         if f_series:
             first_guess["show"] = normalize_show_name(f_series)
 
     # ── is_episode flag (used by scoring.py via context_hints) ───────────────
     has_show = bool(first_guess.get("show"))
     has_season_or_episode = (
-        first_guess.get("season") is not None
-        or first_guess.get("episode") is not None
+        first_guess.get("season") is not None or first_guess.get("episode") is not None
     )
     first_guess["is_episode"] = has_show or has_season_or_episode
     if first_guess["is_episode"] and first_guess["type"] == "unknown":
         first_guess["type"] = "episode"
 
-    # ── MakeMKV disc analysis ─────────────────────────────────────────────────
+    # ── MakeMKV disc analysis ────────────────────────────────────────────────
     if is_makemkv:
         disc = _analyze_disc_context(metadata.path)
         if disc:
@@ -412,48 +399,130 @@ def extract_heuristics(metadata: VideoMetadata) -> None:
                 first_guess["is_episode"] = False
                 first_guess["type"] = "bonus"
 
-    metadata.heuristics = first_guess
+    metadata.guessit["heuristics"] = first_guess
 
 
-def extract_ai_guess(metadata: VideoMetadata, config: dict) -> None:
-    """Ask AI for parsing."""
-    ai_result_raw = run_ai(
-        f"""
-        You are a video metadata parser. 
-        Extract the following information from this video file path:
-        {metadata.path}
+def _build_best_context(metadata: VideoMetadata) -> Dict[str, Any]:
+    """Merge guessit, heuristics, and disc_analysis into a single flat context
+    object for the agentic AI.
 
-        Here are the results of a previous analysis:
-        {metadata.heuristics}
-        and the raw output of guessit:
-        {metadata.guessit}
+    Every field carries a 'source' string so the AI knows how much to trust it:
 
-        Please analyse these data all together and correct them if needed.
+    - ``"filename"``      : parsed directly from the filename (guessit) — high confidence
+    - ``"path_folder"``   : inferred from a parent directory name — medium confidence
+    - ``"disc_analysis_high"`` : MakeMKV disc position + all prior discs found
+    - ``"disc_analysis_medium"``: MakeMKV disc position, some prior discs missing
+    - ``"unknown"``       : not found — agent should search broadly
 
-        Return a JSON object with:
-        - "show": (string) show name if the type is "episode"
-        - "season": (int) season number
-        - "episode": (int) episode number
-        - "dvd": (int) disc number
-        - "part": (int) part number
-        - "title": (string) episode or movie title
-        - "type": (string) one of ["episode", "movie", "unknown"]
+    The returned dict is also stored as ``metadata.heuristics["context"]``.
+    """
+    gi = metadata.guessit["guessit"] or {}
+    h = metadata.guessit["heuristics"] or {}
+    disc = h.get("disc_analysis") or {}
+    is_makemkv = gi.get("is_makemkv", False)
 
-        Heuristics:
-        - If the path contains "S9", "DVD1", or similar, it's likely an episode or a disc of a show.
-        - If the title is "B1 t00", it's likely an episode or a disc of a show.
-        - If the file name is similar to "B1_t00" it is not the title of the episode or the movie it is the standard makemkv output name. So use null for the title.
-        - If it's a TV show, set "type" to "episode".
-        
-        If a field is missing, set it to null. 
-        Output ONLY a valid JSON object.
-    """,
-        config,
-        json_mode=True,
-    )
+    ctx: Dict[str, Any] = {}
 
-    ai_data = json.loads(ai_result_raw)
-    metadata.ai_guess = ai_data
+    # ── show ─────────────────────────────────────────────────────────────────
+    # For MakeMKV files guessit contributes nothing, so we skip straight to
+    # the path-walking result.
+    if not is_makemkv and gi.get("show"):
+        ctx["show"] = gi["show"]
+        ctx["show_source"] = "filename"
+    elif h.get("show"):
+        ctx["show"] = h["show"]
+        ctx["show_source"] = "path_folder"
+    else:
+        ctx["show"] = "unknown"
+        ctx["show_source"] = "unknown"
+
+    # ── season ───────────────────────────────────────────────────────────────
+    if not is_makemkv and gi.get("season") is not None:
+        ctx["season"] = gi["season"]
+        ctx["season_source"] = "filename"
+    elif h.get("season") is not None:
+        ctx["season"] = h["season"]
+        ctx["season_source"] = "path_folder"
+    else:
+        ctx["season"] = "unknown"
+        ctx["season_source"] = "unknown"
+
+    # ── episode ──────────────────────────────────────────────────────────────
+    if not is_makemkv and gi.get("episode") is not None:
+        ctx["episode"] = gi["episode"]
+        ctx["episode_source"] = "filename"
+    elif disc.get("estimated_episode_number") is not None:
+        ctx["episode"] = disc["estimated_episode_number"]
+        ctx["episode_source"] = (
+            "disc_analysis_high"
+            if disc.get("offset_is_exact")
+            else "disc_analysis_medium"
+        )
+        ctx["episode_range_on_disc"] = disc.get("estimated_episode_range", [])
+    else:
+        ctx["episode"] = "unknown"
+        ctx["episode_source"] = "unknown"
+
+    # ── episode title ────────────────────────────────────────────────────────
+    if not is_makemkv and gi.get("title"):
+        ctx["episode_title"] = gi["title"]
+        ctx["episode_title_source"] = "filename"
+    else:
+        ctx["episode_title"] = "unknown"
+        ctx["episode_title_source"] = "unknown"
+
+    # ── dvd / disc number ────────────────────────────────────────────────────
+    dvd = disc.get("dvd_number") or h.get("dvd")
+    if dvd is not None:
+        ctx["dvd_number"] = dvd
+        ctx["total_discs_in_season"] = disc.get("total_discs_found", "unknown")
+    else:
+        ctx["dvd_number"] = "unknown"
+        ctx["total_discs_in_season"] = "unknown"
+
+    # ── content type ─────────────────────────────────────────────────────────
+    if disc:
+        ctx["file_role"] = (
+            "main_episode" if disc.get("is_episode") else "bonus_or_special"
+        )
+    elif h.get("type") not in (None, "unknown"):
+        ctx["file_role"] = h["type"]
+    else:
+        ctx["file_role"] = "unknown"
+
+    ctx["is_makemkv_rip"] = is_makemkv
+
+    # ── human-readable notes for the agent ───────────────────────────────────
+    notes = []
+
+    if is_makemkv:
+        notes.append(
+            "Filename is raw MakeMKV output (e.g. B2_t01.mkv) — "
+            "it carries no show/episode information."
+        )
+    if ctx["show_source"] == "unknown":
+        notes.append("Show name could not be determined — search broadly.")
+    if ctx["episode_source"].startswith("disc_analysis"):
+        conf = "confirmed" if disc.get("offset_is_exact") else "estimated"
+        prior = disc.get("prior_dvds_analyzed", [])
+        notes.append(
+            f"Episode number is {conf} from disc position "
+            f"{disc.get('disc_position')} on disc {dvd} "
+            f"(prior discs counted: {prior})."
+        )
+    if ctx["file_role"] == "bonus_or_special":
+        notes.append(
+            "This file is bonus/extra content — search Season 0 (Specials) first."
+        )
+    if ctx["episode_source"] == "filename":
+        notes.append("Episode number parsed directly from filename — high confidence.")
+
+    ctx["notes"] = notes if notes else ["All fields derived normally."]
+
+    metadata.guessit["context"] = ctx
+
+
+# ── Main extraction functions ────────────────────────────────────────────────
 
 
 def infer_context_from_path(metadata: VideoMetadata) -> Dict[str, Any]:
@@ -466,8 +535,9 @@ def infer_context_from_path(metadata: VideoMetadata) -> Dict[str, Any]:
     Populates guessit, heuristics (and optionally ai_guess) on the metadata
     object.
     """
-    extract_guessit(metadata)
-    extract_heuristics(metadata)
-    # extract_ai_guess(metadata)
+    metadata.guessit = {}
+    _extract_guessit(metadata)
+    _extract_heuristics(metadata)
+    _build_best_context(metadata)
 
     return metadata

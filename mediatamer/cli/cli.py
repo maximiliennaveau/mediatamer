@@ -3,7 +3,8 @@
 Usage:
   mediatamer organize [args...]   # calls mediatamer.organize:main
   mediatamer compress [args...]   # calls mediatamer.compress:main
-  mediatamer metadata [args...]   # calls mediatamer.extract_mkv_metadata:main
+  mediatamer metadata [args...]   # calls mediatamer.metadata:main
+  mediatamer validate [args...]   # calls mediatamer.validate:main
 """
 
 from __future__ import annotations

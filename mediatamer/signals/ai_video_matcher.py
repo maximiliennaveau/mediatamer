@@ -125,7 +125,7 @@ class AIVideoMatcher:
 
                 print(f"  -> Executing {len(queries)} queries...")
                 print(f"  -> Queries: {queries}")
-                target_dur = meta.technical.duration if meta.technical else None
+                target_dur = meta.technical["duration"] if meta.technical else None
                 history_entry = self._execute_search_queries(queries, target_dur)
                 search_history.extend(history_entry)
 
@@ -280,69 +280,34 @@ class AIVideoMatcher:
         """
         # 1. Identity
         identity = """
-            # IDENTITY
-            You are an Autonomous Media Identification Agent. Your goal is to identify the EXACT TV show, season, and episode 
-            for the provided video file. You operate in an iterative loop, using results from previous database searches 
-            to refine your identification.
+# IDENTITY
+You are an Autonomous Media Identification Agent. Your goal is to identify the EXACT TV show, season, and episode 
+for the provided video file. You operate in an iterative loop, using results from previous database searches 
+to refine your identification.
         """
 
         # 2. File and Technical Evidence
-        # Restore compact hints from heuristics and guessit
-        likely_show = next(
-            (
-                v
-                for v in [
-                    meta.heuristics.get("show"),
-                    meta.guessit.get("show"),
-                    meta.ai_guess.get("show"),
-                ]
-                if v
-            ),
-            None,
-        )
-        likely_season = next(
-            (
-                v
-                for v in [
-                    meta.heuristics.get("season"),
-                    meta.guessit.get("season"),
-                    meta.ai_guess.get("season"),
-                ]
-                if v
-            ),
-            None,
-        )
+        # Single consolidated context built by guessit.build_best_context().
+        # Each field carries a _source key so the AI knows its confidence.
+        ctx = (meta.guessit or {}).get("context") or {}
+
+        # Convenience aliases still used by other parts of the prompt builder
+        likely_show = ctx.get("show") or None
+        if likely_show == "unknown":
+            likely_show = None
+        likely_season = ctx.get("season") or None
+        if likely_season == "unknown":
+            likely_season = None
 
         likely_metadata = {
-            "likely_show": likely_show,
-            "likely_season": likely_season,
-            "duration_sec": meta.technical.duration if meta.technical else None,
+            "duration_sec": meta.technical["duration"] if meta.technical else None,
             "full_path": str(meta.path),
+            **ctx,
         }
 
-        # Enrich with disc-level estimates when available
-        disc = (meta.heuristics or {}).get("disc_analysis")
-        if disc:
-            likely_metadata["is_makemkv_rip"] = True
-            likely_metadata["dvd_number"] = disc.get("dvd_number")
-            likely_metadata["total_discs_in_season"] = disc.get("total_discs_found")
-            likely_metadata["file_role"] = (
-                "main_episode" if disc.get("is_episode") else "bonus_or_special"
-            )
-            if disc.get("estimated_episode_number") is not None:
-                likely_metadata["estimated_episode"] = disc["estimated_episode_number"]
-                likely_metadata["estimated_episode_range_this_disc"] = disc.get(
-                    "estimated_episode_range"
-                )
-                likely_metadata["episode_offset_confidence"] = (
-                    "high (all prior discs found)"
-                    if disc.get("offset_is_exact")
-                    else "medium (some prior discs missing)"
-                )
-
         evidence_file = f"""
-            ## EVIDENCE: FILE SYSTEM & TECHNICAL
-            {json.dumps(likely_metadata, indent=2)}
+## EVIDENCE: FILE SYSTEM & TECHNICAL
+{json.dumps(likely_metadata, indent=2)}
         """
 
         # 3. Content-based Evidence (Subtitles & Cast)
@@ -354,121 +319,64 @@ class AIVideoMatcher:
         )
 
         evidence_content = f"""
-            ## EVIDENCE: CONTENT ANALYSIS
-            ### SUBTITLE SUMMARY
-            {summary_content}
+## EVIDENCE: CONTENT ANALYSIS
+### SUBTITLE SUMMARY
+{summary_content}
 
-            ### CAST PROFILE
-            {json.dumps(meta.cast_profile.to_dict() if hasattr(meta.cast_profile, "to_dict") else meta.cast_profile, indent=2)}
+### CAST PROFILE
+{json.dumps(meta.cast_profile.to_dict() if hasattr(meta.cast_profile, "to_dict") else meta.cast_profile, indent=2)}
         """
 
-        # 4. Disc analysis narrative block (MakeMKV rips only)
-        disc_section = ""
-        if disc:
-            ep_letter = disc.get("episode_letter", "?")
-            this_letter = disc.get("this_letter", "?")
-            is_ep = disc.get("is_episode", False)
-            disc_pos = disc.get("disc_position")
-            disc_ep_count = disc.get("disc_episode_count", 0)
-            disc_bonus_count = disc.get("disc_bonus_count", 0)
-            dvd_num = disc.get("dvd_number", "?")
-            total_discs = disc.get("total_discs_found", "?")
-            ep_num = disc.get("estimated_episode_number")
-            ep_range = disc.get("estimated_episode_range", [])
-            prior_dvds = disc.get("prior_dvds_analyzed", [])
-            offset = disc.get("episode_offset", 0)
-            offset_exact = disc.get("offset_is_exact", False)
-
-            role_line = (
-                f"MAIN EPISODE — position {disc_pos} of {disc_ep_count} "
-                f"(letter group '{this_letter}' = episode group '{ep_letter}')"
-                if is_ep
-                else f"BONUS / SPECIAL — letter group '{this_letter}' "
-                f"(episode group is '{ep_letter}', bonus groups: "
-                f"{disc.get('bonus_letters')})"
-            )
-
-            offset_note = (
-                f"exact (discs {prior_dvds} counted)"
-                if offset_exact
-                else f"estimated (only discs {prior_dvds} found of {list(range(1, dvd_num if isinstance(dvd_num, int) else 1))})"
-            )
-
-            ep_estimate_block = ""
-            if is_ep and ep_num is not None:
-                ep_estimate_block = (
-                    f"\n            ESTIMATED SEASON EPISODE : {ep_num} ({offset_note})"
-                    f"\n            EPISODE RANGE ON THIS DISC: {ep_range}"
-                    f"\n            → Primary search target: {likely_show or '?'} "
-                    f"S{likely_season or '?'}E{ep_num}"
-                )
-            elif not is_ep:
-                ep_estimate_block = (
-                    "\n            → This is a BONUS file. "
-                    "Search under Season 0 (Specials) first."
-                )
-
-            disc_section = f"""
-            ## EVIDENCE: DVD DISC ANALYSIS (MakeMKV rip)
-            DISC         : {dvd_num} of ~{total_discs} discs (Season {disc.get('folder_season', likely_season)})
-            FILE ROLE    : {role_line}
-            DISC CONTENTS: {disc_ep_count} main episode(s), {disc_bonus_count} bonus item(s)
-            EPISODE OFFSET FROM PRIOR DISCS: {offset}{ep_estimate_block}
-            """
-
-        # 5. Search Commands
+        # 4. Search Commands
         commands = """
-            ## AVAILABLE SEARCH COMMANDS
-            To gather more information, return a JSON object with status "SEARCHING".
-            
-            1. **SEARCH_EPISODES**: Fetch episode lists and overviews for a show. 
-               - Use "season: 0" for Specials/Movies/OVA.
-               - Example: {"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": 0}
+## AVAILABLE SEARCH COMMANDS
+To gather more information, return a JSON object with status "SEARCHING".
 
-            2. **SEARCH_PERSON**: Look up actor/crew credits. 
-               - Use names from the Cast Profile to disambiguate similar titles.
-               - Example: {"type": "SEARCH_PERSON", "name": "Bryan Cranston"}
+1. **SEARCH_EPISODES**: Fetch episode lists and overviews for a show. 
+    - Use "season: 0" for Specials/Movies/OVA.
+    - Example: {"type": "SEARCH_EPISODES", "show": "Doctor Who", "season": 0}
+
+2. **SEARCH_PERSON**: Look up actor/crew credits. 
+    - Use names from the Cast Profile to disambiguate similar titles.
+    - Example: {"type": "SEARCH_PERSON", "name": "Bryan Cranston"}
         """
 
         tips_and_tricks = f"""
-            ## TIPS AND TRICKS
-            - If show is "Doctor Who", query "Christmas Specials" and {likely_season} seasons.
-            - If the file name is similar to B1_t00.mkv it means the video was extracted by MakeMKV from a DVD. The episode name is unknown — rely on disc analysis above and subtitle/cast evidence.
-            - For MakeMKV bonus files (is_bonus=True), check Season 0 / Specials on TMDB.
+## TIPS AND TRICKS
+- If show is "Doctor Who", also query Season 0 (Christmas Specials) alongside season {likely_season}.
+- Fields with source "unknown" in EVIDENCE mean the agent must search broadly.
+- Fields with source "disc_analysis_high" are reliable — use them as primary search targets.
+- Fields with source "disc_analysis_medium" are estimates — verify against episode durations.
+- For file_role "bonus_or_special", start with Season 0 / Specials on TMDB.
         """
 
-        # 6. Output Format
+        # 5. Output Format
         output_format = """
-            ## OUTPUT FORMAT
-            - Return ONLY valid JSON.
-            - If found: { "status": "FOUND", "reasoning": "...", "show": "...", "season": X, "episode": Y, "title": "...", "confidence_score": 0-100 }
-            - If searching: { "status": "SEARCHING", "reasoning": "...", "queries": [...] }
+## OUTPUT FORMAT
+- Return ONLY valid JSON.
+- If found: { "status": "FOUND", "reasoning": "...", "show": "...", "season": X, "episode": Y, "title": "...", "confidence_score": 0-100 }
+- If searching: { "status": "SEARCHING", "reasoning": "...", "queries": [...] }
         """
 
-        # 7. History
-        # If iterations exceed a certain threshold, we prune older history to save tokens.
-        # Keeping only the most recent 2 searches provides context without context-window bloat.
+        # 6. History
+        # Keeping only the most recent 2 searches to limit context size.
         pruned_history = (
             search_history[-2:] if len(search_history) > 2 else search_history
         )
         history_section = f"""
-            ## PREVIOUS SEARCH RESULTS
-            {json.dumps(pruned_history, indent=2) if pruned_history else "No searches performed yet."}
+## PREVIOUS SEARCH RESULTS
+{json.dumps(pruned_history, indent=2) if pruned_history else "No searches performed yet."}
         """
 
-        # Assemble final prompt and apply cleandoc ONCE at the end
         full_sections = [
             identity,
             evidence_file,
             evidence_content,
-        ]
-        if disc_section:
-            full_sections.append(disc_section)
-        full_sections += [
             commands,
             tips_and_tricks,
             output_format,
             history_section,
         ]
         prompt = inspect.cleandoc("\n\n".join(full_sections))
+        print("[ai_video_matcher] Prompt sent to AI:\n", prompt)
         return prompt

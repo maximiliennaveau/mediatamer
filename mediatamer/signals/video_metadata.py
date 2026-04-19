@@ -1,8 +1,6 @@
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from dataclasses import dataclass, field
-
-from mediatamer.signals.technical import TechnicalSignals
 
 
 @dataclass
@@ -13,14 +11,13 @@ class VideoMetadata:
     """
 
     path: Path
-    technical: Optional[TechnicalSignals] = None
+    technical: Dict[str, Any] = field(default_factory=dict)
     guessit: Dict[str, Any] = field(default_factory=dict)
-    heuristics: Dict[str, Any] = field(default_factory=dict)
-    ai_guess: Dict[str, Any] = field(default_factory=dict)
-    subtitles: Optional[str] = None
+    subtitles: Dict[str, Any] = field(default_factory=dict)
     ai_match: Dict[str, Any] = field(default_factory=dict)
     opensubtitles: Dict[str, Any] = field(default_factory=dict)
     cast_profile: Dict[str, Any] = field(default_factory=dict)
+    ovdb: Dict[str, Any] = field(default_factory=dict)
     summary: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -28,16 +25,13 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
     """Convert VideoMetadata to a serializable dictionary."""
     return {
         "path": str(metadata.path),
-        "technical": metadata.technical.to_dict() if metadata.technical else {},
+        "technical": metadata.technical,
         "guessit": metadata.guessit,
-        "heuristics": metadata.heuristics,
-        "ai_guess": metadata.ai_guess,
         "subtitles": metadata.subtitles,
         "ai_match": metadata.ai_match,
         "opensubtitles": metadata.opensubtitles,
-        "cast_profile": metadata.cast_profile.to_dict()
-        if hasattr(metadata.cast_profile, "to_dict")
-        else metadata.cast_profile,
+        "cast_profile": metadata.cast_profile,
+        "ovdb": metadata.ovdb,
         "summary": metadata.summary,
     }
 
@@ -45,25 +39,14 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
 def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
     """Reconstruct VideoMetadata from a dictionary."""
     path = Path(data["path"])
-    guessit = data.get("guessit", {})
-    heuristics = data.get("heuristics", {})
-    ai_guess = data.get("ai_guess", {})
-    subtitles = data.get("subtitles")
-    ai_match = data.get("ai_match", {})
-    opensubtitles = data.get("opensubtitles", {})
-    technical = data.get("technical", {})
-    cast_profile = data.get("cast_profile", {})
-    summary = data.get("summary", {})
-
     return VideoMetadata(
         path=path,
-        guessit=guessit,
-        heuristics=heuristics,
-        ai_guess=ai_guess,
-        subtitles=subtitles,
-        ai_match=ai_match,
-        opensubtitles=opensubtitles,
-        cast_profile=cast_profile,
-        technical=TechnicalSignals.from_dict(technical),
-        summary=summary,
+        guessit=data.get("guessit", {}),
+        subtitles=data.get("subtitles", {}),
+        ai_match=data.get("ai_match", {}),
+        opensubtitles=data.get("opensubtitles", {}),
+        cast_profile=data.get("cast_profile", {}),
+        technical=data.get("technical", {}),
+        ovdb=data.get("ovdb", {}),
+        summary=data.get("summary", {}),
     )

@@ -4,18 +4,26 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import subprocess
 
+from mediatamer.signals.video_metadata import VideoMetadata
+
+
+def extract_technical(metadata: VideoMetadata) -> dict:
+    """Extract technical metadata using ffprobe."""
+    from mediatamer.signals.technical import TechnicalSignals
+
+    metadata.technical = TechnicalSignals.from_metadata(metadata).to_dict()
+    return metadata.technical
+
 
 @dataclass
 class TechnicalSignals:
-    path: Path
     ffprobe: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_metadata(cls, metadata: "VideoMetadata") -> "TechnicalSignals":
+    def from_metadata(cls, metadata: VideoMetadata) -> "TechnicalSignals":
         """Factory to create signals using the unified metadata context."""
-        path = metadata.path
-        signals = cls(path=path)
-        signals.ffprobe = cls._extract_metadata_ffprobe(path)
+        signals = cls()
+        signals.ffprobe = cls._extract_metadata_ffprobe(metadata.path)
         metadata.technical = signals
         return signals
 
@@ -26,15 +34,20 @@ class TechnicalSignals:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize raw source data for caching. Properties are recomputed on load."""
         return {
-            "path": str(self.path),
             "ffprobe": self.ffprobe,
+            "duration": self.duration,
+            "chapters": self.chapters,
+            "is_multi_episode": self.is_multi_episode,
+            "estimated_episode_count": self.estimated_episode_count,
+            "suggested_ocr_ranges": self.suggested_ocr_ranges,
+            "embedded_title": self.embedded_title,
+            "encoding_date": self.encoding_date,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TechnicalSignals":
         """Reconstruct from a cached dictionary."""
         return cls(
-            path=Path(data["path"]),
             ffprobe=data.get("ffprobe", {}),
         )
 
@@ -134,8 +147,10 @@ class TechnicalSignals:
 
         cmd = [
             "ffprobe",
-            "-v", "error",
-            "-print_format", "json",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             "-show_chapters",

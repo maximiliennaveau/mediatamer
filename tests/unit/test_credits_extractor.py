@@ -52,11 +52,7 @@ EXPECTED_PEOPLE = [
 
 def _all_people(profile) -> list[str]:
     """Return all names from the person-oriented fields, uppercased."""
-    names = (
-        profile.fictional_characters
-        + profile.real_actors
-        + profile.crew_names
-    )
+    names = profile.fictional_characters + profile.real_actors + profile.crew_names
     return [n.upper() for n in names]
 
 
@@ -73,7 +69,7 @@ class TestCreditsExtractorOCR(unittest.TestCase):
         meta = VideoMetadata(path=SINTEL)
         TechnicalSignals.from_metadata(meta)
         extractor = VideoCreditsExtractor(OCR_CONFIG)
-        duration = meta.technical.duration
+        duration = meta.technical["duration"]
         ranges = [
             (0, min(duration, extractor.start_duration)),
             (max(0, duration - extractor.end_duration), duration),
@@ -118,14 +114,16 @@ class TestCreditsExtractorAI(unittest.TestCase):
 
     def test_confidence_is_reasonable(self):
         self.assertGreaterEqual(
-            self.profile.confidence, 50,
+            self.profile.confidence,
+            50,
             "Confidence should be ≥ 50 for a clean credit roll like Sintel",
         )
 
     def test_show_name_is_sintel(self):
         hints_upper = [h.upper() for h in self.profile.show_name_hints]
         self.assertIn(
-            "SINTEL", hints_upper,
+            "SINTEL",
+            hints_upper,
             f"show_name_hints should contain 'SINTEL', got: {self.profile.show_name_hints}",
         )
 
@@ -136,14 +134,15 @@ class TestCreditsExtractorAI(unittest.TestCase):
         self.assertEqual(
             missing,
             [],
-            f"These people were not found in any person field: {missing}\n"
-            f"Got: {found}",
+            f"These people were not found in any person field: {missing}\nGot: {found}",
         )
 
     def test_funders_captured(self):
         """Known funding organisations must appear in producers_and_funders."""
         found = _all_funders(self.profile)
-        missing = [f for f in EXPECTED_FUNDERS if not any(f in entry for entry in found)]
+        missing = [
+            f for f in EXPECTED_FUNDERS if not any(f in entry for entry in found)
+        ]
         self.assertEqual(
             missing,
             [],
@@ -166,7 +165,8 @@ class TestCreditsExtractorAI(unittest.TestCase):
         """The film title should not be classified as a person."""
         found = _all_people(self.profile)
         self.assertNotIn(
-            "SINTEL", found,
+            "SINTEL",
+            found,
             "'SINTEL' is the film title and must not appear in person fields",
         )
 

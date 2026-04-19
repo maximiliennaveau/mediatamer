@@ -17,6 +17,15 @@ from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.signals.cast_from_subtitles import CastProfile, _build_cast_prompt
 
 
+def extract_credits(
+    meta: VideoMetadata, config: Optional[Dict[str, Any]] = None
+) -> CastProfile:
+    """Main entry point to extract credits from a video file."""
+    extractor = VideoCreditsExtractor(config)
+    meta.cast_profile = extractor.extract(meta)
+    return meta.cast_profile
+
+
 class VideoCreditsExtractor:
     """
     Extracts cast and crew information from video frames (opening/closing credits).
@@ -39,11 +48,11 @@ class VideoCreditsExtractor:
             print("[Credits Extractor] Tesseract not found. Skipping.")
             return CastProfile()
 
-        if not meta.technical or not meta.technical.duration:
+        if not meta.technical or not meta.technical["duration"]:
             print("[Credits Extractor] Video duration unknown. Skipping.")
             return CastProfile()
 
-        duration = meta.technical.duration
+        duration = meta.technical["duration"]
 
         # Define ranges: [0, start_duration] and [duration - end_duration, duration]
         ranges = []
@@ -62,8 +71,7 @@ class VideoCreditsExtractor:
         if not filtered_text.strip():
             return CastProfile()
 
-        meta.cast_profile = self._refine_with_ai(filtered_text)
-        return meta.cast_profile
+        return self._refine_with_ai(filtered_text).to_dict()
 
     def _extract_text_from_frames(
         self, video_path: Path, ranges: List[Tuple[float, float]]

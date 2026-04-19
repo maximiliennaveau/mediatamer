@@ -91,9 +91,11 @@ class SubtitleSignals:
         # 2. Perform OCR for the video (limited by config if present).
         scan_duration = self.config.get("subtitle-scan-duration")
         if scan_duration and scan_duration >= 0:
-            duration = min(float(scan_duration) * 60, self.metadata.technical.duration)
+            duration = min(
+                float(scan_duration) * 60, self.metadata.technical["duration"]
+            )
         else:
-            duration = self.metadata.technical.duration
+            duration = self.metadata.technical["duration"]
 
         res = self._ocr_subtitle_ranges([(0.0, duration)])
         if res:
@@ -101,20 +103,9 @@ class SubtitleSignals:
 
         return self.metadata
 
-    def _get_ffprobe_data(self) -> Dict[str, Any]:
-        """Retrieve ffprobe data from VideoMetadata without re-running tools."""
-        if self.metadata.technical and self.metadata.technical.ffprobe:
-            return self.metadata.technical.ffprobe
-
-        # Fallback to manual extraction ONLY if the metadata is missing technical signals
-        # This shouldn't happen based on the requirement that technical metadata is already present.
-        from mediatamer.signals.technical import TechnicalSignals
-
-        return TechnicalSignals._extract_metadata_ffprobe(self.path)
-
     def _find_subtitle_stream(self, pgs_only: bool = False) -> Optional[Dict]:
         """Find a suitable subtitle stream index using existing metadata."""
-        j = self._get_ffprobe_data()
+        j = self.metadata.technical["ffprobe"]
         streams = j.get("streams", [])
 
         candidates = []
@@ -141,7 +132,7 @@ class SubtitleSignals:
 
     def _extract_text_sub_streams(self) -> Optional[str]:
         """Try to extract a text-based subtitle stream (SRT/ASS/etc) as SRT string."""
-        j = self._get_ffprobe_data()
+        j = self.metadata.technical["ffprobe"]
         for s in j.get("streams", []):
             if s.get("codec_type") != "subtitle":
                 continue
