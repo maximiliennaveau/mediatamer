@@ -41,6 +41,7 @@
           pkgs.python3Packages.pyyaml
           pkgs.python3Packages.guessit
           pkgs.python3Packages.ollama
+          pkgs.mkvtoolnix
         ];
         pyproject = true;
         meta = with pkgs.lib; {
