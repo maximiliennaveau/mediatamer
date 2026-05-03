@@ -44,43 +44,40 @@ def fetch_tmdb_episodes(
             return final_show_name, []
 
         results = resp.json().get("results", [])
-        best_show = None
 
-        for s in results:
-            if s["name"].lower() == search_query.lower():
-                best_show = s
-                break
+        # Collect all candidates with matching name (handles classic vs revival duplicates)
+        candidate_shows = [
+            s for s in results if s["name"].lower() == search_query.lower()
+        ]
 
-        if not best_show and is_extras:
-            for s in results:
-                if "extra" in s["name"].lower():
-                    best_show = s
-                    break
+        if not candidate_shows and is_extras:
+            candidate_shows = [s for s in results if "extra" in s["name"].lower()]
 
-        if not best_show and results:
-            best_show = results[0]
+        if not candidate_shows and results:
+            candidate_shows = [results[0]]
 
-        if not best_show:
+        if not candidate_shows:
             return final_show_name, []
 
-        show_id = best_show["id"]
-        tmdb_name = best_show["name"]
-        if is_extras and "extra" not in tmdb_name.lower():
-            final_show_name = f"{tmdb_name} - Extras"
-        else:
-            final_show_name = tmdb_name
+        first_name = candidate_shows[0]["name"]
+        final_show_name = (
+            f"{first_name} - Extras"
+            if (is_extras and "extra" not in first_name.lower())
+            else first_name
+        )
 
-        # 2. Get Season Episodes
-        def fetch_season(s_num):
-            s_url = f"https://api.themoviedb.org/3/tv/{show_id}/season/{s_num}"
+        # 2. Get Season Episodes from every candidate show
+        def fetch_season(s_num, _show_id, _show_label):
+            s_url = f"https://api.themoviedb.org/3/tv/{_show_id}/season/{s_num}"
             r = requests.get(s_url, params={"api_key": api_key, "language": locale})
             if r.ok:
                 eps = r.json().get("episodes", [])
                 for ep in eps:
+                    ep["_show_name"] = _show_label
                     ep_num = ep.get("episode_number")
                     if ep_num:
                         # Fetch credits (crew & cast)
-                        c_url = f"https://api.themoviedb.org/3/tv/{show_id}/season/{s_num}/episode/{ep_num}/credits"
+                        c_url = f"https://api.themoviedb.org/3/tv/{_show_id}/season/{s_num}/episode/{ep_num}/credits"
                         cr = requests.get(c_url, params={"api_key": api_key})
                         if cr.ok:
                             cr_data = cr.json()
@@ -90,11 +87,19 @@ def fetch_tmdb_episodes(
                 return eps
             return []
 
-        episodes_result.extend(fetch_season(season_number))
-
-        # If it's extras or no episodes found, also pull Specials (Season 0)
-        if is_extras or not episodes_result:
-            episodes_result.extend(fetch_season(0))
+        for candidate in candidate_shows:
+            c_id = candidate["id"]
+            year = (candidate.get("first_air_date") or "")[:4]
+            label = f"{candidate['name']} ({year})" if year else candidate["name"]
+            label = (
+                f"{label} - Extras"
+                if (is_extras and "extra" not in label.lower())
+                else label
+            )
+            fetched = fetch_season(season_number, c_id, label)
+            episodes_result.extend(fetched)
+            if is_extras or not fetched:
+                episodes_result.extend(fetch_season(0, c_id, label))
 
     except Exception as e:
         print(f"TMDB Fetch Error: {e}")
@@ -103,7 +108,7 @@ def fetch_tmdb_episodes(
 
 
 def fetch_tmdb_person_credits(
-    person_name: str, api_key: str, media_type: str = "tv", locale: str = "en-US"
+    person_name: str, api_key: str, locale: str = "en-US"
 ) -> List[Dict[str, Any]]:
     """
     Search TMDB for a person by name and return their TV (or movie) credits.
@@ -130,34 +135,40 @@ def fetch_tmdb_person_credits(
 
         # 2. Fetch TV credits
         credits_url = f"https://api.themoviedb.org/3/person/{person_id}/tv_credits"
-        c_resp = requests.get(credits_url, params={"api_key": api_key, "language": locale}, timeout=10)
+        c_resp = requests.get(
+            credits_url, params={"api_key": api_key, "language": locale}, timeout=10
+        )
         if not c_resp.ok:
             return []
 
         credit_data = c_resp.json()
         cast_credits = credit_data.get("cast", [])
         crew_credits = credit_data.get("crew", [])
-        
+
         # Combine and format credits
         all_credits = []
         for c in cast_credits:
-            all_credits.append({
-                "show_id": c.get("id"),
-                "show_name": c.get("name"),
-                "character": c.get("character"),
-                "episode_count": c.get("episode_count"),
-                "role_type": "cast"
-            })
+            all_credits.append(
+                {
+                    "show_id": c.get("id"),
+                    "show_name": c.get("name"),
+                    "character": c.get("character"),
+                    "episode_count": c.get("episode_count"),
+                    "role_type": "cast",
+                }
+            )
         for c in crew_credits:
-            all_credits.append({
-                "show_id": c.get("id"),
-                "show_name": c.get("name"),
-                "job": c.get("job"),
-                "department": c.get("department"),
-                "episode_count": c.get("episode_count"),
-                "role_type": "crew"
-            })
-        
+            all_credits.append(
+                {
+                    "show_id": c.get("id"),
+                    "show_name": c.get("name"),
+                    "job": c.get("job"),
+                    "department": c.get("department"),
+                    "episode_count": c.get("episode_count"),
+                    "role_type": "crew",
+                }
+            )
+
         # Sort by episode count descending
         all_credits.sort(key=lambda x: x.get("episode_count", 0), reverse=True)
         return all_credits

@@ -38,8 +38,9 @@ def _normalize_episode(ep: Dict[str, Any], season_number: int) -> Dict[str, Any]
     return {
         "episode_number": ep.get("number"),
         "season_number": season_number,
-        "name": ep.get("name") or ep.get("translations", {}).get("nameTranslations", [{}])[0].get("name"),
-        "overview": ep.get("overview", ""),
+        "name": ep.get("name")
+        or ep.get("translations", {}).get("nameTranslations", [{}])[0].get("name"),
+        "overview": ep.get("overview") or "",
         "runtime": ep.get("runtime"),  # TVDB already stores this in minutes
         "air_date": ep.get("aired"),
         "id": ep.get("id"),
@@ -84,36 +85,21 @@ def fetch_tvdb_info(
             return final_show_name, []
 
         results = resp.json().get("data") or []
-        best_show = None
 
-        for s in results:
-            if (s.get("name") or "").lower() == search_query.lower():
-                best_show = s
-                break
+        # Collect all candidates with matching name (handles classic vs revival duplicates)
+        candidate_shows = [
+            s for s in results if search_query.lower() in (s.get("name") or "").lower()
+        ]
 
-        if not best_show and is_extras:
-            for s in results:
-                if "extra" in (s.get("name") or "").lower():
-                    best_show = s
-                    break
-
-        if not best_show and results:
-            best_show = results[0]
-
-        if not best_show:
-            return final_show_name, []
-
-        show_id = best_show.get("tvdb_id") or best_show.get("id")
-        tvdb_name = best_show.get("name", show_name)
-        final_show_name = f"{tvdb_name} - Extras" if (is_extras and "extra" not in tvdb_name.lower()) else tvdb_name
-
-        # 2. Fetch episodes for the requested season (paginated, page 0 covers most seasons)
-        def fetch_season_episodes(s_num: int) -> List[Dict[str, Any]]:
+        # 2. Fetch episodes from every candidate show
+        def fetch_season_episodes(
+            s_num: int, _show_id, _show_label: str
+        ) -> List[Dict[str, Any]]:
             collected = []
             page = 0
             while True:
                 r = requests.get(
-                    f"{_TVDB_BASE}/series/{show_id}/episodes/official",
+                    f"{_TVDB_BASE}/series/{_show_id}/episodes/official",
                     params={"season": s_num, "page": page},
                     headers=headers,
                     timeout=10,
@@ -124,19 +110,33 @@ def fetch_tvdb_info(
                 eps = (body.get("data") or {}).get("episodes") or []
                 if not eps:
                     break
-                collected.extend(_normalize_episode(ep, s_num) for ep in eps)
-                # Stop if there is no next page
+                normalized = [_normalize_episode(ep, s_num) for ep in eps]
+                for ep in normalized:
+                    ep["_show_name"] = _show_label
+                collected.extend(normalized)
                 links = body.get("links") or {}
                 if not links.get("next"):
                     break
                 page += 1
             return collected
 
-        episodes_result.extend(fetch_season_episodes(season_number))
-
-        # Also pull Season 0 (specials) when looking for extras or if nothing was found
-        if is_extras or not episodes_result:
-            episodes_result.extend(fetch_season_episodes(0))
+        for candidate in candidate_shows:
+            c_id = candidate.get("tvdb_id") or candidate.get("id")
+            year = str(candidate.get("year") or "")[:4]
+            label = (
+                f"{candidate.get('name', show_name)} ({year})"
+                if year
+                else candidate.get("name", show_name)
+            )
+            label = (
+                f"{label} - Extras"
+                if (is_extras and "extra" not in label.lower())
+                else label
+            )
+            fetched = fetch_season_episodes(season_number, c_id, label)
+            episodes_result.extend(fetched)
+            if is_extras or not fetched:
+                episodes_result.extend(fetch_season_episodes(0, c_id, label))
 
     except Exception as e:
         print(f"[TVDB] Fetch error: {e}")

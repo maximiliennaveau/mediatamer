@@ -5,11 +5,12 @@ from mediatamer.signals.cache import load_metadata, save_metadata
 from mediatamer.signals.credits_extractor import extract_credits
 from mediatamer.signals.guessit import infer_context_from_path
 from mediatamer.signals.opensubtitles import OpenSubtitleSignals
-from mediatamer.signals.search_ovdb import extract_ovdb_info
 from mediatamer.signals.subtitle import SubtitleSignals
 from mediatamer.signals.summary_from_subtitles import extract_summary_from_subtitles
+from mediatamer.signals.search_ovdb import search_ovdb
 from mediatamer.signals.technical import extract_technical
 from mediatamer.signals.video_metadata import VideoMetadata
+from mediatamer.signals.metadata_verifier import MetadataVerifier
 
 
 def extract_all_metadata(
@@ -41,10 +42,13 @@ def extract_all_metadata(
     print(f"  Summary: {'Yes' if metadata.summary else 'No'}")
     print(f"  OVDB: {'Yes' if metadata.ovdb else 'No'}")
 
-    # Technical
+    # Verifier
+    metadata_verifier = MetadataVerifier(config["tmdb-api-key"], config["tvdb-api-key"])
+
+    # Technical data
     if not metadata.technical:
-        print("Extracting technical metadata...")
-        extract_technical(metadata)
+        print("Extracting technical data...")
+        extract_technical(metadata, config)
         save_metadata(metadata)
 
     # GuessIt
@@ -53,48 +57,119 @@ def extract_all_metadata(
         infer_context_from_path(metadata, config)
         save_metadata(metadata)
 
-    # 2.5 OpenSubtitles
+    # Verify guessit against TMDB and TVDB.
+    g_data = metadata.guessit["guessit"]
+    if g_data["season"] is not None and g_data["episode"] is not None:
+        # On a assez d'infos pour tenter une validation directe API
+        # Si show == "unknown", on utilise le nom du dossier parent comme show_name_hint
+        show_name = g_data["show"] if g_data["show"] != "unknown" else "Doctor Who"
+
+        result = metadata_verifier.verify_against_providers(
+            show_name, g_data["season"], g_data["episode"]
+        )
+        if result:
+            metadata.final_result = result
+            save_metadata(metadata)
+            return metadata
+
+    # OpenSubtitles
     if not metadata.opensubtitles:
         print("Extracting opensubtitles metadata...")
         try:
-            OpenSubtitleSignals(metadata, config).extract()
+            os_result = OpenSubtitleSignals(metadata, config).extract()
             save_metadata(metadata)
+            if os_result:
+                return metadata
         except Exception as e:
             print(f"Failed to extract OpenSubtitles metadata: {e}")
 
-    # Subtitles
-    if not metadata.subtitles:
-        print("Extracting subtitle metadata...")
-        SubtitleSignals(metadata, config).extract()
-        save_metadata(metadata)
-
-    # 4 Credits
+    # Credits
     if not metadata.cast_profile:
         print("Extracting credits metadata...")
         extract_credits(metadata, config)
         save_metadata(metadata)
 
-    # Summary from subtitles
-    if not metadata.summary:
-        print("Extracting summary from subtitles...")
-        extract_summary_from_subtitles(metadata, config)
-        save_metadata(metadata)
-
-    # Inspect TVDB and TMDB from credits and actors and summaries.
+    # Search OVDB with the credits informations
     if not metadata.ovdb:
         print("Extracting OVDB metadata...")
-        extract_ovdb_info(metadata, config)
+        search_ovdb(metadata, config)
         save_metadata(metadata)
 
-    # AI Episode Matcher
-    if not metadata.ai_match:
-        print("Extracting AI episode matcher metadata...")
-        match_episode(metadata, config)
-    else:
-        print("AI episode matcher metadata already cached, skipping.")
+    if metadata.ovdb and metadata.ovdb["score"] > 2.0:
+        result = metadata_verifier.verify_against_providers(
+            metadata.ovdb["show_name"],
+            metadata.ovdb["season"],
+            metadata.ovdb["episode"],
+        )
+        if result:
+            metadata.final_result = result
+            save_metadata(metadata)
+            return metadata
 
-    # Dump the found metadata for debugging.
-    print("Saving metadata...")
-    save_metadata(metadata)
+    print("Fail to identify the video from guessit and credits.")
+    metadata.final_result = {}
+    return metadata
+
+    # # Subtitles
+    # if not metadata.subtitles:
+    #     print("Extracting subtitle metadata...")
+    #     SubtitleSignals(metadata, config).extract()
+    #     save_metadata(metadata)
+
+    # # Summary from subtitles
+    # if not metadata.summary:
+    #     print("Extracting summary from subtitles...")
+    #     extract_summary_from_subtitles(metadata, config)
+    #     save_metadata(metadata)
+
+    # # Inspect TVDB and TMDB from credits and actors and summaries.
+    # # if not metadata.ovdb:
+    # #     print("Extracting OVDB metadata...")
+    # #     extract_ovdb_info(metadata, config)
+    # #     save_metadata(metadata)
+
+    # # AI Episode Matcher
+    # if not metadata.ai_match or "error" in metadata.ai_match:
+    #     print("Extracting AI episode matcher metadata...")
+    #     match_episode(metadata, config)
+    # else:
+    #     print("AI episode matcher metadata already cached, skipping.")
+
+    # # Dump the found metadata for debugging.
+    # print("Saving metadata...")
+    # save_metadata(metadata)
 
     return metadata
+
+
+def verify_metadata(metadata: VideoMetadata, config: dict) -> VideoMetadata:
+    """Verify metadata against TVDB and TMDB for consistency."""
+
+    # --- ÉTAPE 1 : GUESSIT ---
+    g = metadata.guessit["guessit"]
+    if g["show"] != "unknown" and g["season"] and g["episode"]:
+        result = verifier.verify_against_providers(g["show"], g["season"], g["episode"])
+        if result:
+            return result  # HIT !
+
+    # --- ÉTAPE 2 : CASTING SEARCH (Votre algo précédent) ---
+    print("Guessit failed or invalid episode. Trying Casting Search...")
+    match = matcher.find_best_episode(
+        metadata.cast_profile["real_actors"], metadata.path
+    )
+    if match and match["score"] > 2.0:
+        return verifier.get_tvdb_metadata(
+            match["show_name"], match["season"], match["episode"]
+        )
+
+    # --- ÉTAPE 3 : SUMMARY / SUBTITLES ---
+    # Si le casting échoue, on prend le résumé OCR et on cherche sur le web.
+    print("Casting search failed. Trying Semantic Search...")
+    summary = metadata.summary.get("summary")
+    if summary:
+        # Ici, vous pouvez utiliser l'API "Google Custom Search" ou
+        # plus simplement envoyer le résumé à un LLM (via API) pour demander :
+        # "Quel épisode de Doctor Who correspond à ce résumé ?"
+        pass
+
+    return None

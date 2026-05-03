@@ -1,23 +1,22 @@
-"""
-Uses heuristics and AI to extract the video information from cast and summary.
-"""
-
 import requests
 import re
 from difflib import SequenceMatcher
+from pathlib import Path
 
-from mediatamer.signals.video_metadata import VideoMetadata
 
-BASE_URL = "https://api.themoviedb.org/3"
+from mediatamer.config import load_config
+from mediatamer.signals.cache import load_metadata, save_metadata
+from mediatamer.signals.credits_extractor import extract_credits
+from mediatamer.signals.technical import extract_technical
 
 
 class MetadataMatcher:
-    def __init__(self, tmdb_api_key: str):
+    def __init__(self, tmdb_api_key):
         print(f"Using API KEY: {tmdb_api_key}")
         self.api_key = tmdb_api_key
         self.base_url = "https://api.themoviedb.org/3"
 
-    def _fuzzy_ratio(self, s1: str, s2: str) -> float:
+    def _fuzzy_ratio(self, s1, s2):
         """Calcule la similitude entre deux chaînes pour gérer l'OCR sale."""
         return SequenceMatcher(None, s1.upper(), s2.upper()).ratio()
 
@@ -133,27 +132,35 @@ class MetadataMatcher:
         return best_overall_match
 
 
-def search_ovdb(metadata: VideoMetadata, config: dict) -> bool:
+def process_video(file_path, ocr_cast, config):
     matcher = MetadataMatcher(config.get("tmdb-api-key"))
 
-    print(f"Analyse de : {metadata.path}")
-    result = matcher.find_best_episode(
-        metadata.cast_profile["real_actors"], metadata.path
-    )
+    print(f"Analyse de : {file_path}")
+    result = matcher.find_best_episode(ocr_cast, file_path)
 
-    if result and result["score"] > 1.5:
-        print("search_ovdb: --- MATCH TROUVÉ ---")
+    if result and result["score"] > 1.5:  # On valide si on a au moins 2 matches solides
+        print("--- MATCH TROUVÉ ---")
+        print(f"Série    : {result['show_name']} ({result['series_air_date'][:4]})")
         print(
-            f"search_ovdb: Série    : {result['show_name']} ({result['series_air_date'][:4]})"
+            f"Épisode  : S{result['season']:02d}E{result['episode']:02d} - {result['title']}"
         )
-        print(
-            f"search_ovdb: Épisode  : S{result['season']:02d}E{result['episode']:02d} - {result['title']}"
-        )
-        print(f"search_ovdb: Confiance (>=2 is solid): {result['score']:.2f}")
-        print(f"search_ovdb: Acteurs confirmés: {', '.join(result['matched_names'])}")
+        print(f"Confiance: {result['score']:.2f}")
+        print(f"Acteurs confirmés: {', '.join(result['matched_names'])}")
     else:
-        print("search_ovdb: Aucun match concluant trouvé.")
+        print("Aucun match concluant trouvé.")
 
-    metadata.ovdb = result
 
-    return result
+if __name__ == "__main__":
+    path = Path("/data/videos/unsorted-compressed-tv/Doctor_Who_S9_DVD1/B1_t00.mkv")
+    config = load_config()
+    metadata = load_metadata(path, config)
+
+    # print("Extracting credits metadata...")
+    # extract_technical(metadata)
+    # extract_credits(metadata, config)
+    # save_metadata(metadata)
+
+    print(f"Path : {metadata.path}")
+    print(f"Cast Profile : {metadata.cast_profile.get('real_actors')}")
+
+    process_video(metadata.path, metadata.cast_profile.get("real_actors"), config)

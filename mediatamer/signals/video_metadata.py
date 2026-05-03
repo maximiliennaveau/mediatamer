@@ -19,6 +19,7 @@ class VideoMetadata:
     cast_profile: Dict[str, Any] = field(default_factory=dict)
     ovdb: Dict[str, Any] = field(default_factory=dict)
     summary: Dict[str, Any] = field(default_factory=dict)
+    final_result: Dict[str, Any] = field(default_factory=dict)
 
 
 def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
@@ -33,6 +34,7 @@ def metadata_to_dict(metadata: VideoMetadata) -> Dict[str, Any]:
         "cast_profile": metadata.cast_profile,
         "ovdb": metadata.ovdb,
         "summary": metadata.summary,
+        "final_result": metadata.final_result,
     }
 
 
@@ -49,4 +51,5 @@ def metadata_from_dict(data: Dict[str, Any]) -> VideoMetadata:
         technical=data.get("technical", {}),
         ovdb=data.get("ovdb", {}),
         summary=data.get("summary", {}),
+        final_result=data.get("final_result", {}),
     )

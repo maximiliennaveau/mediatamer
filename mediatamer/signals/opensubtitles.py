@@ -74,7 +74,7 @@ class OpenSubtitleSignals:
 
         return None
 
-    def extract(self) -> None:
+    def extract(self) -> bool:
         try:
             moviehash = self._compute_osdb_hash(self.metadata.path)
             if not moviehash:
@@ -82,7 +82,7 @@ class OpenSubtitleSignals:
                     "Could not compute OpenSubtitles hash (file too small or unavailable)."
                 )
                 self.metadata.opensubtitles = {"status": "hash_failed"}
-                return
+                return False
 
             print(f"Computed OpenSubtitles hash: {moviehash}")
             result = self._fetch_metadata(moviehash)
@@ -90,10 +90,12 @@ class OpenSubtitleSignals:
             if result:
                 self.metadata.opensubtitles = result
                 print(f"Found OpenSubtitles match: {result}")
-            else:
-                self.metadata.opensubtitles = {"status": "no_match", "hash": moviehash}
-                print("No match found on OpenSubtitles.")
+                return True
+
+            self.metadata.opensubtitles = {"status": "no_match", "hash": moviehash}
+            print("No match found on OpenSubtitles.")
+            return False
 
         except Exception as e:
             print(f"Error during OpenSubtitles extraction: {e}")
-            raise
+            return False

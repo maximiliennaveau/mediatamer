@@ -1,13 +1,21 @@
 """Organize module for MediaTamer."""
 
+import json
 from pathlib import Path
 import argparse
-from shutil import move, copy2
-import argcomplete
-from mediatamer.cli.argparse_utils import add_common_arguments
 
-from mediatamer.parameters import get_extensions
-from mediatamer.utils import sanitize_filename, zero_pad
+# from shutil import move, copy2
+import argcomplete
+
+from mediatamer.config import load_config
+from mediatamer.signals.video_metadata import VideoMetadata, metadata_to_dict
+from mediatamer.extract_metada import extract_all_metadata
+from mediatamer.cli.argparse_utils import add_common_arguments
+from mediatamer.utils import (
+    sanitize_filename,
+    zero_pad,
+    extract_files_to_process,
+)
 
 
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -31,20 +39,6 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
         action="store_true",
         help="Move files instead of copying when --apply is used",
     )
-    parser.add_argument(
-        "--exts",
-        nargs="*",
-        default=get_extensions(),
-        help="Video extensions to include (example: .mp4 .mkv)",
-    )
-    parser.add_argument(
-        "--tmdb-api-key",
-        type=str,
-        help="TMDB API key for episode title lookup (can be set in config)",
-    )
-    parser.add_argument(
-        "--language", type=str, default="fr-FR", help="Language for metadata lookup"
-    )
     parser = add_common_arguments(parser)
     return parser
 
@@ -57,106 +51,52 @@ def main():
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
-    # Load config for fallback
-    from mediatamer.config import load_config
-
-    config = load_config()
-    tmdb_key = args.tmdb_api_key or config.get("tmdb-api-key")
+    # Load config
+    config = load_config(args.config)
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
 
-    # Use the robust metadata engine
-    from .get_tv_shows_metadata import get_tv_shows_metadata
+    output_json_path = output_root / "metadata.json"
+    output_data = {}
 
-    print(f"Scanning {input_root}...")
-    results = get_tv_shows_metadata(
-        input_root,
-        tmdb_key,
-        language=args.language,
-        recursive=True,
-        sorted_dir=output_root,  # Use output as reference for bonus numbering
-    )
-
-    planned_dests = set()
-    actions = []
-
-    for entry in results.get("files", []):
-        src = Path(entry["path"])
-        show = entry.get("show_detected") or "Unknown Show"
-        season = entry.get("season_detected")
-        episode = entry.get("episode_detected")
-
-        if season is None:
-            season = 1  # Fallback
-
-        if not episode:
-            # Skip files with no detected episode number
-            actions.append((src, None, None, "SKIP (No Episode)"))
-            continue
-
-        selected = entry.get("selected_episode")
-        title = ""
-        if selected and selected.get("name"):
-            title = sanitize_filename(selected["name"])
-
-        season_str = zero_pad(season)
-        episode_str = zero_pad(episode)
-
-        show_dir_name = sanitize_filename(show)
-        dest_dir = output_root / show_dir_name / f"Season {season_str}"
-
-        title_part = f" - {title}" if title else ""
-        dest_name = f"{show_dir_name} - S{season_str}E{episode_str}{title_part}{src.suffix.lower()}"
-        dest_path = dest_dir / dest_name
-
-        # Handle collisions
-        counter = 1
-        candidate = dest_path
-        while candidate.exists() or candidate in planned_dests:
-            candidate = (
-                dest_dir
-                / f"{show_dir_name} - S{season_str}E{episode_str} ({counter}){src.suffix.lower()}"
-            )
-            counter += 1
-
-        planned_dests.add(candidate)
-        actions.append(
-            (
-                src,
-                candidate,
-                args.move if args.apply else None,
-                "MOVE"
-                if args.apply and args.move
-                else ("COPY" if args.apply else "DRY"),
-            )
-        )
-
-    print("\nPlanned actions:")
-    for src, dest, move_flag, action in actions:
-        if dest is None:
-            print(f"  {action}: {src.name}")
-        else:
-            print(f"  {action}: {src.name} -> {dest.relative_to(output_root)}")
-
-    if not args.apply:
-        print(
-            "\nDry-run mode. To apply changes, re-run with --apply and optionally --move to move files."
-        )
-        return
-
-    for src, dest, move_flag, action in actions:
-        if dest is None:
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
+    files = extract_files_to_process(input_root)
+    metadata_list = {}
+    for f in files:
         try:
-            if move_flag:
-                move(str(src), str(dest))
-            else:
-                copy2(str(src), str(dest))
+            print(f"Extracting metadata for {f}...")
+            meta = VideoMetadata(path=f)
+            meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
+            metadata_list[str(f)] = metadata_to_dict(meta)
         except Exception as e:
-            print(f"Error processing {src}: {e}")
+            print(f"Error extracting metadata for {f}:\n{e}")
+            continue
 
+        output_path = str(
+            output_root
+            / meta.ai_match.get("show")
+            / f"Season {zero_pad(meta.ai_match.get('season') or 1)}"
+            / f"{sanitize_filename(meta.ai_match.get('show') or 'Unknown Show')} - "
+            f"S{zero_pad(meta.ai_match.get('season') or 1)}E"
+            f"{zero_pad(meta.ai_match.get('episode') or 0)} - "
+            f"{sanitize_filename(meta.ai_match.get('title') or '')}"
+            f"{meta.path.suffix.lower()}"
+        )
+
+        output = {
+            "show": meta.ai_match.get("show"),
+            "season": meta.ai_match.get("season"),
+            "episode": meta.ai_match.get("episode"),
+            "title": meta.ai_match.get("title"),
+            "type": meta.ai_match.get("type"),
+            "output_path": output_path,
+            "user_modified": False,
+        }
+        output_data[str(f)] = output
+
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_json_path, "w", encoding="utf-8") as f:
+        json.dump(output_data, f, indent=4)
     print("\nDone. Files organized under:", output_root)
 
 

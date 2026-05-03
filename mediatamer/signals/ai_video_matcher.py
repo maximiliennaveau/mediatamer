@@ -1,7 +1,6 @@
 import json
 import inspect
 from typing import List, Dict, Any, Optional
-from mediatamer.config import load_config
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, fetch_tmdb_person_credits
 from mediatamer.signals.tvdb import fetch_tvdb_info
 from mediatamer.ai import run_ai
@@ -15,11 +14,6 @@ def match_episode(meta: VideoMetadata, config: dict) -> None:
 
 
 class AIVideoMatcher:
-    def __init__(self):
-        self.config = load_config()
-        self.tmdb_api_key = self.config.get("tmdb-api-key")
-        self.tvdb_api_key = self.config.get("tvdb-api-key")
-
     def match(self, meta: VideoMetadata, config: dict) -> None:
         self.config = config
         self.tmdb_api_key = self.config.get("tmdb-api-key")
@@ -28,16 +22,13 @@ class AIVideoMatcher:
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
         sub_text = meta.subtitles or ""
         search_history = []
-        max_iterations = 4
+        max_iterations = 8
         iteration = 0
 
         while iteration < max_iterations:
             iteration += 1
-            print(f"\n[AI Agent Loop] Iteration {iteration}/{max_iterations}...")
-
+            print(f"\n[AI Agent Loop] Iteration {iteration}/{max_iterations}.")
             prompt = self._build_agentic_prompt(meta, search_history)
-
-            # Note: We must ensure JSON format from the AI.
             response = run_ai(prompt, config, json_mode=True)
 
             try:
@@ -57,6 +48,7 @@ class AIVideoMatcher:
                 season = action.get("season")
                 episode_num = action.get("episode")
                 title = action.get("title")
+                video_type = action.get("type")
 
                 # Verify with scoring to be safe
                 print(
@@ -81,7 +73,9 @@ class AIVideoMatcher:
                         meta.technical,
                         sub_text=sub_text,
                         context_hints={
-                            "is_likely_episode": meta.heuristics.get("is_episode"),
+                            "is_likely_episode": (meta.guessit or {})
+                            .get("heuristics", {})
+                            .get("is_episode"),
                             "season_number": season,
                         },
                     )
@@ -97,6 +91,7 @@ class AIVideoMatcher:
                         "score": final_score,
                         "reasoning": reasoning + f" (Verified Score: {final_score})",
                         "ai_full_response": action,
+                        "type": video_type,
                         "phase": f"agent_found_iter_{iteration}",
                     }
                 else:
@@ -123,8 +118,8 @@ class AIVideoMatcher:
                     )
                     break
 
-                print(f"  -> Executing {len(queries)} queries...")
                 print(f"  -> Queries: {queries}")
+                print(f"  -> Executing {len(queries)} queries...")
                 target_dur = meta.technical["duration"] if meta.technical else None
                 history_entry = self._execute_search_queries(queries, target_dur)
                 search_history.extend(history_entry)
@@ -137,30 +132,6 @@ class AIVideoMatcher:
             meta.ai_match = {
                 "error": "Max iterations reached without finding an episode."
             }
-
-    def initial_guess(self, meta: VideoMetadata) -> Dict:
-        guess_heuristic = meta.heuristics
-        guess_guessit = meta.guessit
-        tech_data = meta.technical.to_dict() if meta.technical else {}
-        sub_text = meta.subtitles or ""
-
-        if not guess_heuristic or not guess_guessit or not tech_data or not sub_text:
-            print("[AI Episode Matcher] Missing required signals. Skipping.")
-            return
-
-        initial_show_guess = [
-            guess_heuristic.get("show"),
-            guess_guessit.get("show"),
-        ]
-        initial_show_guess = [show for show in initial_show_guess if show]
-
-        initial_season_guess = [
-            guess_heuristic.get("season"),
-            guess_guessit.get("season"),
-        ]
-        initial_season_guess = [season for season in initial_season_guess if season]
-
-        return initial_show_guess, initial_season_guess
 
     @staticmethod
     def _resolve_season(season) -> int:
@@ -188,9 +159,7 @@ class AIVideoMatcher:
             return int(alias)
         except ValueError:
             # Last resort: unknown alias → treat as Season 0 with a warning
-            print(
-                f"     [Warning] Unknown season alias '{season}', defaulting to Season 0"
-            )
+            print(f"Warning] Unknown season alias '{season}', defaulting to Season 0")
             return 0
 
     def _execute_search_queries(
@@ -204,21 +173,23 @@ class AIVideoMatcher:
                 name = q.get("name")
                 if not name:
                     continue
-                print(f"     Fetching TMDB for Person '{name}'")
+                print(f"Fetching TMDB for Person '{name}'")
                 credits = fetch_tmdb_person_credits(name, self.tmdb_api_key)
 
-                # Keep top 15 to avoid huge context, truncate overviews
-                filtered_credits = []
-                for cr in credits[:15]:
-                    ov = cr.get("overview", "")
-                    cr["overview"] = (ov[:200] + "...") if len(ov) > 200 else ov
-                    filtered_credits.append(cr)
+                # # Keep top 15 to avoid huge context, truncate overviews
+                # filtered_credits = []
+                # for cr in credits[:15]:
+                #     ov = cr.get("overview", "")
+                #     print(f"Overview for credit '{name}': {ov}")
+                #     cr["overview"] = (ov[:200] + "...") if len(ov) > 200 else ov
+                #     filtered_credits.append(cr)
 
+                print(f"Found {len(credits)} credits for '{name}'")
                 results.append(
                     {
                         "query": {"type": "SEARCH_PERSON", "name": name},
-                        "results_count": len(filtered_credits),
-                        "credits": filtered_credits,
+                        "results_count": len(credits),
+                        "credits": credits,
                     }
                 )
             else:
@@ -226,47 +197,56 @@ class AIVideoMatcher:
                 se_raw = q.get("season")
                 if not sh or se_raw is None:
                     continue
-            se = self._resolve_season(se_raw)
+                se = self._resolve_season(se_raw)
 
-            print(f"     Fetching TMDB & TVDB for '{sh}' Season {se} (raw: '{se_raw}')")
-            # Fetch TMDB
-            _, tmdb_eps = fetch_tmdb_episodes(sh, se, self.tmdb_api_key)
-            # Fetch TVDB (which user redirected to API basically)
-            _, tvdb_eps = fetch_tvdb_info(sh, se, self.tvdb_api_key)
+                print(f"Fetching TMDB & TVDB for '{sh}' Season {se} (raw: '{se_raw}')")
+                # Fetch TMDB
+                _, tmdb_eps = fetch_tmdb_episodes(sh, se, self.tmdb_api_key)
+                # Fetch TVDB
+                resolved_name, tvdb_eps = fetch_tvdb_info(sh, se, self.tvdb_api_key)
 
-            # Combine distinct, truncate overviews, and filter by duration
-            combined_hash = {}
-            for ep in tmdb_eps + tvdb_eps:
-                ep_id = ep.get("episode_number")
-                if ep_id and ep_id not in combined_hash:
-                    # Duration check (tolerance: +/- 15 mins)
-                    ep_dur_min = ep.get("runtime")
-                    if target_duration_sec and ep_dur_min:
-                        diff = abs((ep_dur_min * 60) - target_duration_sec)
-                        if diff > 900:  # 15 minutes
-                            # Skip if duration mismatch is too large, unless it's the only hit
-                            if len(tmdb_eps + tvdb_eps) > 1:
-                                continue
+                # Combine distinct episodes, truncate overviews
+                # Key includes show name to keep classic vs revival episodes separate
+                combined_hash = {}
+                for ep in tmdb_eps + tvdb_eps:
+                    ep_id = ep.get("episode_number")
+                    ep_show = ep.get("_show_name") or resolved_name
+                    hash_key = (ep_show, ep_id)
+                    if ep_id and hash_key not in combined_hash:
+                        ov = ep.get("overview") or ""
+                        combined_hash[hash_key] = {
+                            "show name": ep_show,
+                            "season_number": se,
+                            "episode_number": ep_id,
+                            "name": ep.get("name"),
+                            "overview": ov,
+                            "runtime_min": ep.get("runtime"),
+                            "guest_stars": [
+                                g.get("name") for g in ep.get("guest_stars", [])
+                            ],
+                        }
 
-                    ov = ep.get("overview", "")
-                    combined_hash[ep_id] = {
-                        "episode_number": ep_id,
-                        "name": ep.get("name"),
-                        "overview": (ov[:200] + "...") if len(ov) > 200 else ov,
-                        "runtime_min": ep_dur_min,
-                        "guest_stars": [
-                            g.get("name") for g in ep.get("guest_stars", [])[:3]
-                        ],
+                all_eps = list(combined_hash.values())
+
+                # Duration filter (tolerance: +/- 15 mins) — only apply if it leaves at least one result
+                if target_duration_sec:
+                    duration_filtered = [
+                        ep
+                        for ep in all_eps
+                        if not ep["runtime_min"]
+                        or abs((ep["runtime_min"] * 60) - target_duration_sec) <= 900
+                    ]
+                    filtered_eps = duration_filtered if duration_filtered else all_eps
+                else:
+                    filtered_eps = all_eps
+
+                results.append(
+                    {
+                        "query": {"show": sh, "season": se},
+                        "results_count": len(filtered_eps),
+                        "episodes": filtered_eps,
                     }
-
-            filtered_eps = list(combined_hash.values())
-            results.append(
-                {
-                    "query": {"show": sh, "season": se},
-                    "results_count": len(filtered_eps),
-                    "episodes": filtered_eps,
-                }
-            )
+                )
         return results
 
     def _build_agentic_prompt(
@@ -348,7 +328,7 @@ To gather more information, return a JSON object with status "SEARCHING".
 - Fields with source "disc_analysis_high" are reliable — use them as primary search targets.
 - Fields with source "disc_analysis_medium" are estimates — verify against episode durations.
 - For file_role "bonus_or_special", start with Season 0 / Specials on TMDB.
-        """
+"""
 
         # 5. Output Format
         output_format = """

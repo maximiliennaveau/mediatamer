@@ -16,9 +16,15 @@ def _get_cache_path(video_path: Path, config: dict = None) -> Path:
     """Generate a stable cache path based on the file's absolute path."""
     if config is None:
         cache_dir = CACHE_DIR
+        print(f"Using default cache directory: {cache_dir}")
     else:
         cache_dir = Path(config.get("cache-dir", CACHE_DIR))
+    if not cache_dir.exists():
+        print(f"User cache directory {cache_dir} not found.")
+        cache_dir = CACHE_DIR
+        print(f"Using default cache directory: {cache_dir}")
 
+    cache_dir.mkdir(parents=True, exist_ok=True)
     file_id = hashlib.sha256(str(video_path.resolve()).encode()).hexdigest()
     return cache_dir / f"{file_id}.json"
 

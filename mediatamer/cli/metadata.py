@@ -19,8 +19,7 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Extract metadata from videos.")
+    parser = argparse.ArgumentParser(description="Extract metadata from videos.")
     parser = get_agument_parser(parser)
     args = parser.parse_args()
 
@@ -40,12 +39,14 @@ def main():
             print(f"Error extracting metadata for {f}:\n{e}")
             continue
 
+        print(f"TVDB info: {meta.final_result}")
+
         print(f"Extracted metadata for {f}:")
-        print(f"Show: {meta.ai_match.get('show')}")
-        print(f"Season: {meta.ai_match.get('season')}")
-        print(f"Episode: {meta.ai_match.get('episode')}")
-        print(f"Title: {meta.ai_match.get('title')}")
-        print(f"Type: {meta.ai_match.get('type')}")
+        print(f"\t- Series name: {meta.final_result['series_full_name']}")
+        print(f"\t- Episode title: {meta.final_result['name']}")
+        print(f"\t- Season number: {meta.final_result['seasonNumber']}")
+        print(f"\t- Episode number: {meta.final_result['number']}")
+
         print(f"Extracting metadata for {f}... Done")
 
 
