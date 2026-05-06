@@ -48,29 +48,29 @@ def extract_all_metadata(
     # Technical data
     if not metadata.technical:
         print("Extracting technical data...")
-        extract_technical(metadata, config)
+        extract_technical(metadata)
         save_metadata(metadata)
+        print("Extracting technical data... Done")
 
     # GuessIt
     if not metadata.guessit:
         print("Extracting guessit metadata...")
         infer_context_from_path(metadata, config)
         save_metadata(metadata)
+        print("Extracting guessit metadata... Done")
 
     # Verify guessit against TMDB and TVDB.
+    print("Verifying guessit metadata...")
     g_data = metadata.guessit["guessit"]
     if g_data["season"] is not None and g_data["episode"] is not None:
-        # On a assez d'infos pour tenter une validation directe API
-        # Si show == "unknown", on utilise le nom du dossier parent comme show_name_hint
-        show_name = g_data["show"] if g_data["show"] != "unknown" else "Doctor Who"
-
         result = metadata_verifier.verify_against_providers(
-            show_name, g_data["season"], g_data["episode"]
+            g_data["show"], g_data["season"], g_data["episode"]
         )
         if result:
             metadata.final_result = result
             save_metadata(metadata)
             return metadata
+    print("Verifying guessit metadata... Done")
 
     # OpenSubtitles
     if not metadata.opensubtitles:
@@ -82,20 +82,28 @@ def extract_all_metadata(
                 return metadata
         except Exception as e:
             print(f"Failed to extract OpenSubtitles metadata: {e}")
+        print("Extracting OpenSubtitles metadata... Done")
 
     # Credits
+    print("Extracting cast profile...")
     if not metadata.cast_profile:
         print("Extracting credits metadata...")
         extract_credits(metadata, config)
         save_metadata(metadata)
+    print("Extracting cast profile... Done")
 
     # Search OVDB with the credits informations
     if not metadata.ovdb:
         print("Extracting OVDB metadata...")
         search_ovdb(metadata, config)
         save_metadata(metadata)
+        print("Extracting OVDB metadata... Done")
 
-    if metadata.ovdb and metadata.ovdb["score"] > 2.0:
+    if (
+        metadata.ovdb
+        and metadata.ovdb["ordered_candidates"]
+        and metadata.ovdb["ordered_candidates"][0]["score"] > 10.0
+    ):
         result = metadata_verifier.verify_against_providers(
             metadata.ovdb["show_name"],
             metadata.ovdb["season"],

@@ -363,6 +363,11 @@ def _build_best_context_with_ai(
 Given the following information extracted from the filename and path of a video file.
 Determine the most likely show name, season number, episode number, and whether it's a bonus/extra episode.
 
+Path of the file: {metadata.path}
+
+Content of the folder containing the file:
+{[f.name for f in metadata.path.parent.iterdir() if f.is_file()]}
+
 Metadata extracted analytically:
 {metadata.guessit}
 
@@ -405,5 +410,7 @@ def infer_context_from_path(metadata: VideoMetadata, config: dict) -> Dict[str, 
     metadata.guessit = {}
     metadata.guessit["is_makemkv"] = _is_makemkv_filename(metadata.path.name)
     _extract_guessit(metadata)
+    _extract_heuristics(metadata)
+    # _build_best_context_with_ai(metadata, config)
 
     return metadata

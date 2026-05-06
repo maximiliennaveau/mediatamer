@@ -61,40 +61,38 @@ def main():
     output_data = {}
 
     files = extract_files_to_process(input_root)
-    metadata_list = {}
     for f in files:
         try:
             print(f"Extracting metadata for {f}...")
             meta = VideoMetadata(path=f)
             meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
-            metadata_list[str(f)] = metadata_to_dict(meta)
         except Exception as e:
             print(f"Error extracting metadata for {f}:\n{e}")
             continue
 
+        print(f"Extracted metadata for {f}:")
+        print(f"\t- Series name: {meta.final_result['series_full_name']}")
+        print(f"\t- Episode title: {meta.final_result['name']}")
+        print(f"\t- Season number: {meta.final_result['seasonNumber']}")
+        print(f"\t- Episode number: {meta.final_result['number']}")
+
         output_path = str(
             output_root
-            / meta.ai_match.get("show")
-            / f"Season {zero_pad(meta.ai_match.get('season') or 1)}"
-            / f"{sanitize_filename(meta.ai_match.get('show') or 'Unknown Show')} - "
-            f"S{zero_pad(meta.ai_match.get('season') or 1)}E"
-            f"{zero_pad(meta.ai_match.get('episode') or 0)} - "
-            f"{sanitize_filename(meta.ai_match.get('title') or '')}"
+            / meta.final_result["series_full_name"]
+            / f"Season {zero_pad(meta.final_result['seasonNumber'])}"
+            / f"{sanitize_filename(meta.final_result['series_full_name'])} - "
+            f"S{zero_pad(meta.final_result['seasonNumber'])}"
+            f"E{zero_pad(meta.final_result['number'])} - "
+            f"{meta.final_result['name']}"
             f"{meta.path.suffix.lower()}"
         )
 
-        output = {
-            "show": meta.ai_match.get("show"),
-            "season": meta.ai_match.get("season"),
-            "episode": meta.ai_match.get("episode"),
-            "title": meta.ai_match.get("title"),
-            "type": meta.ai_match.get("type"),
-            "output_path": output_path,
-            "user_modified": False,
-        }
+        output = {}
+        output["output_path"] = output_path
         output_data[str(f)] = output
+        print(output_data)
 
-    output_json_path.parent.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
     with open(output_json_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=4)
     print("\nDone. Files organized under:", output_root)

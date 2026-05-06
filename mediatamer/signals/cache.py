@@ -42,7 +42,8 @@ def load_metadata(video_path: Path, config: dict = None) -> Optional[VideoMetada
             print(f"Error loading cache for {video_path.name}: {e}")
     else:
         print(f"Cache file not found for {video_path.name}.")
-    return None
+    # If no cache found we return a default object.
+    return VideoMetadata(path=video_path)
 
 
 def save_metadata(metadata: VideoMetadata, config: dict = None):
