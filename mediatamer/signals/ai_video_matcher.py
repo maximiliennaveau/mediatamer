@@ -1,11 +1,21 @@
 import json
 import inspect
+import re
+import math
 from typing import List, Dict, Any, Optional
 from mediatamer.signals.tmdb import fetch_tmdb_episodes, fetch_tmdb_person_credits
 from mediatamer.signals.tvdb import fetch_tvdb_info
 from mediatamer.ai import run_ai
 from mediatamer.signals.video_metadata import VideoMetadata
+from mediatamer.signals.technical import TechnicalSignals
 from mediatamer.signals.scoring import score_episode_match
+
+
+def _as_technical(technical) -> TechnicalSignals:
+    """Return a TechnicalSignals object whether technical is already one or a dict."""
+    if isinstance(technical, TechnicalSignals):
+        return technical
+    return TechnicalSignals.from_dict(technical or {})
 
 
 def match_episode(meta: VideoMetadata, config: dict) -> None:
@@ -21,6 +31,19 @@ class AIVideoMatcher:
 
         print(f"[AI Episode Matcher] Analyzing iteratively: {meta.path.name}")
         sub_text = meta.subtitles or ""
+
+        # ── Step 0: deterministic pre-filter from OVDB cast cross-reference ──
+        # Episodes with match_count >= 2 have at least two OCR-extracted people
+        # confirmed in TMDB credits. Score them heuristically; if a clear winner
+        # exists, skip the expensive LLM loop entirely.
+        ovdb_result = self._try_ovdb_candidates(meta, sub_text)
+        if ovdb_result:
+            meta.ai_match = ovdb_result
+            return
+
+        assert False
+
+        # ── Step 1: LLM iterative agentic loop (fallback) ────────────────────
         search_history = []
         max_iterations = 8
         iteration = 0
@@ -70,7 +93,7 @@ class AIVideoMatcher:
                     score_res = score_episode_match(
                         target_ep,
                         meta.path,
-                        meta.technical,
+                        _as_technical(meta.technical),
                         sub_text=sub_text,
                         context_hints={
                             "is_likely_episode": (meta.guessit or {})
@@ -108,6 +131,12 @@ class AIVideoMatcher:
                         "ai_full_response": action,
                         "phase": f"agent_found_unverified_iter_{iteration}",
                     }
+                meta.ai_match["best_match"] = {
+                    "show_name": show,
+                    "season": season,
+                    "episode": episode_num,
+                    "title": meta.ai_match.get("title", ""),
+                }
                 break
 
             elif status == "SEARCHING":
@@ -132,6 +161,322 @@ class AIVideoMatcher:
             meta.ai_match = {
                 "error": "Max iterations reached without finding an episode."
             }
+
+    def _try_ovdb_candidates(
+        self,
+        meta: VideoMetadata,
+        sub_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Identify the episode from OVDB cast-ranked candidates.
+
+        Strategy:
+          1. Keep only candidates with match_count >= 2 (at least two OCR-confirmed
+             cast members).
+          2. If one episode has strictly more matches than all others, pick it
+             immediately (no LLM call needed).
+          3. Otherwise ask the LLM to pick the best match by comparing each
+             candidate's official overview against the subtitle-derived summary.
+             This is a single, cheap, focused LLM call — not an iterative search
+             loop.
+        Returns a result dict on success, or None to fall through to the full LLM
+        loop.
+        """
+        ranked = (meta.ovdb or {}).get("ranked_episodes", [])
+        candidates = [ep for ep in ranked if ep.get("match_count", 0) >= 2]
+        if not candidates:
+            return None
+
+        # Use a single LLM call to compare overviews vs summary.
+        subtitle_summary = (
+            (meta.summary or {}).get("summary", "").strip()
+            if isinstance(meta.summary, dict)
+            else str(meta.summary or "").strip()
+        )
+        if not subtitle_summary:
+            print(
+                f"[OVDB pre-filter] {len(candidates)} candidate(s) with match_count >= 2,"
+                " but no subtitle summary available. Falling through to LLM loop."
+            )
+            return None
+
+        print(
+            f"[OVDB pre-filter] {len(candidates)} candidate(s) with match_count >= 2."
+            " Using summary comparison to disambiguate."
+        )
+        best_ep = self._pick_by_summary_llm(candidates, subtitle_summary)
+        if best_ep is None:
+            return None
+        people_str = ", ".join(
+            p.get("person_name", "") for p in best_ep.get("matched_people", [])
+        )
+        return self._build_result(
+            best_ep,
+            f"Summary comparison among {len(candidates)} cast-ranked candidates ({people_str})",
+            "ovdb_cast_prefilter_summary",
+        )
+
+    # ------------------------------------------------------------------
+    # Deterministic summary-vs-overview scoring
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tokenize(text: str) -> List[str]:
+        """Lowercase, strip punctuation, remove English/French stop words."""
+        _STOPWORDS = {
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "his",
+            "her",
+            "their",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "has",
+            "have",
+            "had",
+            "he",
+            "she",
+            "they",
+            "it",
+            "who",
+            "that",
+            "this",
+            "as",
+            "by",
+            "from",
+            "not",
+            "no",
+            "can",
+            "will",
+            "just",
+            "do",
+            "does",
+            "its",
+            "into",
+            "when",
+            # French
+            "le",
+            "la",
+            "les",
+            "un",
+            "une",
+            "des",
+            "du",
+            "de",
+            "et",
+            "en",
+            "est",
+            "il",
+            "elle",
+            "ils",
+            "elles",
+            "se",
+            "sa",
+            "son",
+            "ses",
+            "que",
+            "qui",
+            "ne",
+            "pas",
+            "sur",
+            "au",
+            "aux",
+            "par",
+            "si",
+        }
+        words = re.findall(r"[a-záàâéèêëïîôùûüç]+", text.lower())
+        return [w for w in words if w not in _STOPWORDS and len(w) > 2]
+
+    @staticmethod
+    def _idf_scores(candidate_tokens: List[List[str]]) -> Dict[str, float]:
+        """Compute IDF for each word across all candidates.
+        Rare words (appear in few overviews) score higher.
+        """
+        N = len(candidate_tokens)
+        df: Dict[str, int] = {}
+        for tokens in candidate_tokens:
+            for w in set(tokens):
+                df[w] = df.get(w, 0) + 1
+        return {w: math.log((N + 1) / (count + 1)) for w, count in df.items()}
+
+    def _score_overlap(
+        self,
+        summary_tokens: List[str],
+        overview_tokens: List[str],
+        idf: Dict[str, float],
+    ) -> float:
+        """Sum IDF weights of summary words that appear in the overview."""
+        overview_set = set(overview_tokens)
+        return sum(idf.get(w, 0.0) for w in summary_tokens if w in overview_set)
+
+    def _pick_by_summary(
+        self,
+        candidates: List[Dict[str, Any]],
+        subtitle_summary: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Identify which candidate's overview best matches the subtitle summary
+        using deterministic TF-IDF keyword overlap.  Falls back to the LLM only
+        when the top two candidates are within 15% of each other.
+        """
+        # Tokenize
+        summary_tokens = self._tokenize(subtitle_summary)
+        overviews = [ep.get("overview", "") for ep in candidates]
+        overview_token_lists = [self._tokenize(ov) for ov in overviews]
+
+        # IDF is computed over candidate overviews only (not the summary) so that
+        # words appearing in every episode ("Doctor", "Clara") get down-weighted.
+        idf = self._idf_scores(overview_token_lists)
+
+        scores = [
+            self._score_overlap(summary_tokens, ov_tokens, idf)
+            for ov_tokens in overview_token_lists
+        ]
+
+        for i, (ep, sc) in enumerate(zip(candidates, scores)):
+            print(
+                f"[OVDB overlap] S{ep['season']:02d}E{ep['episode']:02d}"
+                f" '{ep['title']}' overlap_score={sc:.3f}"
+            )
+
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        best_score = scores[best_idx]
+
+        # Check runner-up: if it's within 15% of the best, we're not confident.
+        sorted_scores = sorted(scores, reverse=True)
+        second_score = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
+        margin = (best_score - second_score) / (best_score + 1e-9)
+
+        print(
+            f"[OVDB overlap] Best: S{candidates[best_idx]['season']:02d}"
+            f"E{candidates[best_idx]['episode']:02d}"
+            f" '{candidates[best_idx]['title']}'"
+            f" score={best_score:.3f}, margin={margin:.1%}"
+        )
+
+        if best_score > 0 and margin >= 0.15:
+            return candidates[best_idx]
+
+        # Scores too close — fall back to LLM.
+        print("[OVDB overlap] Scores too close, falling back to LLM comparison.")
+        return self._pick_by_summary_llm(candidates, subtitle_summary)
+
+    def _pick_by_summary_llm(
+        self,
+        candidates: List[Dict[str, Any]],
+        subtitle_summary: str,
+    ) -> Optional[Dict[str, Any]]:
+        """LLM fallback: ask the model to compare overviews against the summary.
+        Used only when keyword overlap cannot disambiguate."""
+
+        # Build a compact numbered list of candidates for the prompt.
+        candidate_list = "\n".join(
+            f"{i + 1}. S{ep['season']:02d}E{ep['episode']:02d} '{ep['title']}': "
+            f"{ep.get('overview', 'No overview available.')}"
+            for i, ep in enumerate(candidates)
+        )
+
+        prompt = inspect.cleandoc(f"""
+            You are a TV episode identification assistant. You must identify which episode a video file
+            corresponds to by carefully comparing a summary extracted from its subtitles against a list
+            of official episode overviews.
+
+            ## SUBTITLE SUMMARY
+            {subtitle_summary}
+
+            ## CANDIDATES
+            {candidate_list}
+
+            ## INSTRUCTIONS
+            1. Read the subtitle summary carefully and extract the key plot elements:
+               - Who are the main characters and what are they doing?
+               - What is the main conflict or situation?
+               - What specific locations, objects, or events are mentioned?
+            2. For EACH candidate, check whether its overview aligns with those plot elements.
+               Pay attention to specific details (character names, locations, threats) — do NOT
+               match on generic phrases like "the Doctor" or "Daleks" that could apply to many episodes.
+            3. Pick the ONE candidate whose overview best fits the subtitle summary.
+            4. If no candidate is a good fit, return index 0.
+
+            ## OUTPUT
+            Return ONLY valid JSON with exactly these keys:
+            - "plot_elements": short list of the key plot elements you extracted from the subtitle summary
+            - "index": the 1-based number of the best matching candidate (integer, 0 if no match)
+            - "reasoning": one sentence explaining why this candidate matches better than the others
+            - "confidence": integer 0-100 (be conservative — only use 80+ if there is a specific detail match)
+        """)
+
+        print("[OVDB pre-filter] --- SUBTITLE SUMMARY ---")
+        print(subtitle_summary)
+        print("[OVDB pre-filter] --- CANDIDATE OVERVIEWS ---")
+        print(candidate_list)
+        print("[OVDB pre-filter] --- END ---")
+        print(
+            "[OVDB pre-filter] (LLM fallback) Sending summary-comparison prompt to LLM..."
+        )
+        response = run_ai(prompt, self.config, json_mode=True)
+        try:
+            result = json.loads(response)
+        except Exception as e:
+            print(f"[OVDB pre-filter] Failed to parse LLM response: {e}")
+            return None
+
+        idx = result.get("index", 0)
+        confidence = result.get("confidence", 0)
+        reasoning = result.get("reasoning", "")
+        plot_elements = result.get("plot_elements", [])
+        print(f"[OVDB pre-filter] LLM extracted plot elements: {plot_elements}")
+        print(
+            f"[OVDB pre-filter] LLM chose index={idx}, confidence={confidence}: {reasoning}"
+        )
+
+        if idx == 0 or confidence < 40:
+            print(
+                "[OVDB pre-filter] LLM not confident enough. Falling through to LLM loop."
+            )
+            return None
+
+        if not (1 <= idx <= len(candidates)):
+            print(f"[OVDB pre-filter] LLM returned out-of-range index {idx}. Ignoring.")
+            return None
+
+        return candidates[idx - 1]
+
+    @staticmethod
+    def _build_result(ep: Dict[str, Any], reasoning: str, phase: str) -> Dict[str, Any]:
+        """Build a standardised ai_match result dict from an OVDB episode entry."""
+        best_match = {
+            "show_name": ep.get("show_name", ""),
+            "season": ep.get("season"),
+            "episode": ep.get("episode"),
+            "title": ep.get("title", ""),
+        }
+        return {
+            "best_match": best_match,
+            "show": ep.get("show_name", ""),
+            "season": ep.get("season"),
+            "episode": ep.get("episode"),
+            "title": ep.get("title", ""),
+            "score": None,
+            "match_count": ep.get("match_count"),
+            "matched_people": ep.get("matched_people", []),
+            "best_candidate": ep,
+            "reasoning": reasoning,
+            "phase": phase,
+        }
 
     @staticmethod
     def _resolve_season(season) -> int:
