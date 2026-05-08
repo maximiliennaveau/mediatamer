@@ -11,7 +11,7 @@ class MetadataVerifier:
 
     def _get_tvdb_headers(self):
         if not self._tvdb_token:
-            # Note: Utilisez votre fonction de login TVDB v4 existante ici
+            # Note: Use your existing TVDB v4 login function here
             resp = requests.post(
                 "https://api4.thetvdb.com/v4/login", json={"apikey": self.tvdb_key}
             )
@@ -22,9 +22,9 @@ class MetadataVerifier:
         self, show_name: str, season: int, episode: int
     ) -> Optional[Dict[str, Any]]:
         """
-        Valide l'existence d'un épisode et récupère le nom formaté par TVDB.
+        Validate the existence of an episode and retrieve the TVDB-formatted name.
         """
-        # 1. Validation rapide via TMDB
+        # 1. Quick validation via TMDB
         search_resp = requests.get(
             f"{self.tmdb_base}/search/tv",
             params={"api_key": self.tmdb_key, "query": show_name},
@@ -32,6 +32,7 @@ class MetadataVerifier:
 
         results = search_resp.get("results", [])
         if not results:
+            print(f"MetadataVerifier: No TMDB results for '{show_name}'")
             return None
 
         tmdb_show_id = results[0]["id"]
@@ -42,24 +43,30 @@ class MetadataVerifier:
         )
 
         if ep_resp.status_code != 200:
+            print(
+                f"MetadataVerifier: No TMDB episode found for '{show_name}' S{season:02d}E{episode:02d}"
+            )
             return None
 
-        # 2. Extraction des métadonnées TVDB
+        # 2. Extraction of TVDB metadata
         output = self.get_tvdb_metadata(show_name, season, episode)
         if not output or "seriesId" not in output:
+            print(
+                f"MetadataVerifier: No TVDB metadata found for '{show_name}' S{season:02d}E{episode:02d}"
+            )
             return None
 
-        # 3. Récupération du titre de la série tel que TVDB le gère
+        # 3. Retrieval of the series title as managed by TVDB
         url = f"https://api4.thetvdb.com/v4/series/{output['seriesId']}"
         resp = requests.get(url, headers=self._get_tvdb_headers()).json()
         series_data = resp.get("data", {})
 
-        # TVDB fournit souvent "Doctor Who (2005)" ou "Doctor Who (1963)" dans .name
-        # On le stocke tel quel pour le tagging MKV
+        # TVDB often provides "Doctor Who (2005)" or "Doctor Who (1963)" in .name
+        # We store it as is for MKV tagging
         output["series_full_name"] = series_data.get("name")
         output["series_first_aired"] = series_data.get("firstAired")
 
-        # On garde l'année seule au cas où tu en aurais besoin pour un autre champ (ex: DATE)
+        # Keep the year alone in case you need it for another field (e.g., DATE)
         if output["series_first_aired"]:
             output["series_year"] = output["series_first_aired"][:4]
 
@@ -69,11 +76,11 @@ class MetadataVerifier:
         self, show_name: str, season: int, episode: int
     ) -> Optional[Dict[str, Any]]:
         """
-        Récupère les métadonnées complètes de TVDB prêtes pour le tagging MKV.
+        Retrieve the full TVDB metadata ready for MKV tagging.
         """
         headers = self._get_tvdb_headers()
 
-        # Recherche de la série sur TVDB
+        # Search for the series on TVDB
         search = requests.get(
             "https://api4.thetvdb.com/v4/search",
             params={"query": show_name, "type": "series"},
@@ -84,16 +91,16 @@ class MetadataVerifier:
             return None
         tvdb_id = search["data"][0]["tvdb_id"]
 
-        # Récupération de l'épisode étendu
-        # On utilise l'ordre officiel ou DVD ici
+        # Retrieval of the extended episode
+        # We use the official or DVD order here
         url = f"https://api4.thetvdb.com/v4/series/{tvdb_id}/episodes/official"
         params = {"season": season, "episodeNumber": episode}
 
-        # Note: TVDB v4 nécessite souvent de paginer ou de filtrer.
-        # Pour faire simple, on récupère l'épisode spécifique s'il existe.
+        # Note: TVDB v4 often requires pagination or filtering.
+        # For simplicity, we retrieve the specific episode if it exists.
         ep_data = requests.get(url, params=params, headers=headers).json()
 
-        # On renvoie le premier match
+        # Return the first match
         if ep_data.get("data", {}).get("episodes"):
             return ep_data["data"]["episodes"][0]
 

@@ -35,10 +35,14 @@ class VideoCreditsExtractor:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.fps = self.config.get("credits-scan-fps", 0.2)  # 1 frame every 5 seconds
-        self.start_duration = self.config.get(
-            "credits-start-duration", 120
-        )  # first 2 mins
-        self.end_duration = self.config.get("credits-end-duration", 300)  # last 5 mins
+        # Hard caps (seconds) — windows will never exceed these values
+        self.start_duration = self.config.get("credits-start-duration", 120)
+        self.end_duration = self.config.get("credits-end-duration", 300)
+        # Fraction of total episode duration — windows scale with content length.
+        # Effective window = min(hard_cap, duration × fraction).
+        # Defaults: 8 % for opening, 18 % for closing.
+        self.start_fraction = self.config.get("credits-start-fraction", 0.2)
+        self.end_fraction = self.config.get("credits-end-fraction", 0.2)
 
     def extract(self, meta: VideoMetadata) -> CastProfile:
         """
@@ -54,10 +58,20 @@ class VideoCreditsExtractor:
 
         duration = meta.technical["duration"]
 
-        # Define ranges: [0, start_duration] and [duration - end_duration, duration]
-        ranges = []
-        ranges.append((0, min(duration, self.start_duration)))
-        ranges.append((max(0, duration - self.end_duration), duration))
+        # Scale windows with episode length, capped at the hard limits.
+        # This prevents over-scanning short episodes and under-scanning long ones.
+        start_window = min(self.start_duration, duration * self.start_fraction)
+        end_window = min(self.end_duration, duration * self.end_fraction)
+
+        # Build ranges, ensuring the two windows never overlap.
+        end_start = max(start_window, duration - end_window)
+        ranges = [
+            (0, start_window),
+            (end_start, duration),
+        ]
+        # Deduplicate when the two ranges collapse into one (very short content)
+        if end_start <= start_window:
+            ranges = [(0, duration)]
 
         print(
             f"[Credits Extractor] Scanning video frames for credits in {len(ranges)} ranges:\n\t{ranges}"

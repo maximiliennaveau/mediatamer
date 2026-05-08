@@ -330,9 +330,30 @@ class MetadataMatcher:
             show_id = show
             show_name = ""
 
-        # Fetch show details to get the season list (unless a hint is given)
+        # Fetch show details to get the season list (unless a hint is given).
+        # Season 0 (specials / Christmas episodes) is always included alongside
+        # the hinted season so that specials are never silently skipped.
         if season_hint is not None:
-            seasons_to_fetch = [season_hint]
+            seasons_to_fetch = sorted({0, season_hint})
+            # Ensure we still populate `show_name` when the caller provided a
+            # season hint (we previously skipped fetching show details and
+            # left `show_name` empty). Fetch the show detail but continue to
+            # only request the hinted seasons.
+            try:
+                detail_resp = requests.get(
+                    f"{self.base_url}/tv/{show_id}",
+                    params={"api_key": self.api_key, "language": "en-US"},
+                    timeout=10,
+                )
+                if detail_resp.ok:
+                    detail = detail_resp.json()
+                    if not show_name:
+                        show_name = detail.get("name", "")
+            except Exception:
+                # Best-effort only — if this fails we can still proceed with
+                # seasons fetched, but the returned episodes may have an
+                # empty `show_name`.
+                pass
         else:
             try:
                 detail_resp = requests.get(
@@ -671,9 +692,6 @@ class MetadataMatcher:
             o: [] for o in ocr_actors
         }
 
-        # Fallback cleaned OCR list for fuzzy name matching
-        clean_ocr_list = [self.clean_string(a) for a in ocr_actors if a and len(a) > 2]
-
         for show in results:
             show_id = show["id"]
             # Build a sensible list of seasons to check: prefer hinted season, otherwise first two
@@ -897,57 +915,68 @@ class MetadataMatcher:
 
 
 def search_ovdb(metadata: VideoMetadata, config: dict) -> bool:
-    show = metadata.guessit.get("heuristics").get("show")
     matcher = MetadataMatcher(config.get("tmdb-api-key"))
     people = metadata.cast_profile["real_actors"] + metadata.cast_profile["crew_names"]
-    print(f"search_ovdb: Acteurs/crew extraits: {people}")
-    result = matcher.find_best_episodes(show, people, metadata.path)
-    ordered_candidates = result.get("ordered_candidates", [])
-    person_episode_map = result.get("person_episode_map", {})
-    person_candidates_map = result.get("person_candidates_map", {})
-    best_overlap = result.get("best_overlap")
+    print(f"search_ovdb: People extracted: {people}")
 
-    if ordered_candidates and ordered_candidates[0]["score"] > 5:
-        top = ordered_candidates[0]
-        print("search_ovdb: --- MATCH TROUVÉ ---")
+    if not people:
+        print("search_ovdb: No people found, skipping.")
+        metadata.ovdb = {"shows": [], "ranked_episodes": [], "best_episode": None}
+        return False
+
+    # Step 1: find best show(s) by cross-referencing all people across TMDB
+    shows = matcher.crossreference_people(people)
+    if not shows:
+        print("search_ovdb: No matching show found.")
+        metadata.ovdb = {"shows": [], "ranked_episodes": [], "best_episode": None}
+        return False
+
+    best_show = shows[0]
+    year = best_show["first_air_date"][:4] if best_show.get("first_air_date") else "?"
+    print(
+        f"search_ovdb: Best show: {best_show['show_name']} ({year})"
+        f" id:{best_show['show_id']} — {best_show['match_count']} people matched"
+    )
+    for p in best_show["people"]:
         print(
-            f"search_ovdb: Série    : {top['show_name']} ({top['series_air_date'][:4]})"
+            f"search_ovdb:   '{p['ocr_name']}' → {p['person_name']}"
+            f" (id:{p['person_id']}, {p['credit_type']}, {p['episode_count']} eps)"
         )
+
+    # Step 2: fetch episode metadata, narrowed by season when detectable from path
+    season_hint = matcher.get_season_from_path(metadata.path)
+    episodes = matcher.get_show_episodes(best_show["show_id"], season_hint=season_hint)
+
+    # Step 3: rank episodes by how many of the resolved people appear
+    ranked = matcher.rank_episodes_by_cast(episodes, best_show["people"])
+
+    # Check if the best episode has strictly the highest number of matched OCR names
+    # and that this number is > 0
+    best_episode = (
+        ranked[0]
+        if ranked
+        and ranked[0]["match_count"] > 0
+        and all(ranked[0]["match_count"] > ep["match_count"] for ep in ranked[1:])
+        else {}
+    )
+
+    if best_episode and best_episode["match_count"] > 0:
+        print("search_ovdb: --- MATCH FOUND ---")
+        print(f"search_ovdb: Show   : {best_episode['show_name']} ({year})")
         print(
-            f"search_ovdb: Épisode  : S{top['season']:02d}E{top['episode']:02d} - {top['title']}"
+            f"search_ovdb: Episode: S{best_episode['season']:02d}E{best_episode['episode']:02d}"
+            f" - {best_episode['title']}"
         )
-        print(f"search_ovdb: Confiance (>=2 is solid): {top['score']:.2f}")
-        print(
-            f"search_ovdb: Acteurs confirmés: {', '.join(top.get('matched_names', []))}"
+        hits = ", ".join(
+            f"{p['person_name']}({p['credit_type']})"
+            for p in best_episode["matched_people"]
         )
+        print(f"search_ovdb: People : {best_episode['match_count']} matched — {hits}")
     else:
-        print("search_ovdb: Aucun match concluant trouvé.")
-
-    # Best-overlap episode (most distinct OCR names matching)
-    if best_overlap and best_overlap.get("matched_ocr_names"):
-        print(
-            f"search_ovdb: Episode with most matched people: S{best_overlap['season']:02d}"
-            f"E{best_overlap['episode']:02d} - {best_overlap.get('title')}"
-        )
-        print(
-            f"search_ovdb: Matched OCR names ({len(best_overlap['matched_ocr_names'])}): "
-            f"{', '.join(best_overlap['matched_ocr_names'])}"
-        )
-
-    # Print per-person summary (concise)
-    for person, eps in person_episode_map.items():
-        if not eps:
-            continue
-        sample = eps[:5]
-        summary = [
-            f"S{e['season']:02d}E{e['episode']:02d}:{e.get('title', '') or ''}"
-            for e in sample
-        ]
-        print(f"search_ovdb: {person} -> {len(eps)} matches: {', '.join(summary)}")
+        print("search_ovdb: No conclusive match found.")
 
     metadata.ovdb = {
-        "ordered_candidates": ordered_candidates,
-        "person_episode_map": person_episode_map,
-        "person_candidates_map": person_candidates_map,
-        "best_overlap": best_overlap,
+        "shows": shows,
+        "ranked_episodes": ranked,
+        "best_episode": best_episode,
     }

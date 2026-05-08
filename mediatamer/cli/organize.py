@@ -70,6 +70,10 @@ def main():
             print(f"Error extracting metadata for {f}:\n{e}")
             continue
 
+        if not meta.final_result:
+            print(f"Failed to extract metadata for {f}. Skipping.")
+            continue
+
         print(f"Extracted metadata for {f}:")
         print(f"\t- Series name: {meta.final_result['series_full_name']}")
         print(f"\t- Episode title: {meta.final_result['name']}")

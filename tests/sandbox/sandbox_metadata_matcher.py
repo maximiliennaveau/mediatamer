@@ -158,7 +158,7 @@ if __name__ == "__main__":
     # print("Extracting credits metadata...")
     # extract_technical(metadata)
     # extract_credits(metadata, config)
-    # save_metadata(metadata)
+    # save_metadata(metadata, config)
 
     print(f"Path : {metadata.path}")
     print(f"Cast Profile : {metadata.cast_profile.get('real_actors')}")

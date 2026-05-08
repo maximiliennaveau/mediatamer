@@ -12,25 +12,23 @@ from mediatamer.signals.video_metadata import (
 CACHE_DIR = Path.home() / ".cache" / "mediatamer" / "metadata"
 
 
-def _get_cache_path(video_path: Path, config: dict = None) -> Path:
+def _get_cache_path(video_path: Path, config: dict) -> Path:
     """Generate a stable cache path based on the file's absolute path."""
-    if config is None:
-        cache_dir = CACHE_DIR
-        print(f"Using default cache directory: {cache_dir}")
-    else:
-        cache_dir = Path(config.get("cache-dir", CACHE_DIR))
+    cache_dir = Path(config.get("cache-dir", CACHE_DIR))
     if not cache_dir.exists():
         print(f"User cache directory {cache_dir} not found.")
         cache_dir = CACHE_DIR
         print(f"Using default cache directory: {cache_dir}")
 
+    print(f"Using cache directory: {cache_dir}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     file_id = hashlib.sha256(str(video_path.resolve()).encode()).hexdigest()
     return cache_dir / f"{file_id}.json"
 
 
-def load_metadata(video_path: Path, config: dict = None) -> Optional[VideoMetadata]:
+def load_metadata(video_path: Path, config: dict) -> Optional[VideoMetadata]:
     """Load cached metadata for a video file if it exists."""
+    assert config is not None
     cache_path = _get_cache_path(video_path, config)
     if cache_path.exists():
         try:
@@ -48,11 +46,13 @@ def load_metadata(video_path: Path, config: dict = None) -> Optional[VideoMetada
 
 def save_metadata(metadata: VideoMetadata, config: dict = None):
     """Save metadata to the centralized cache."""
+    assert config is not None
     cache_path = _get_cache_path(metadata.path, config)
     cache_dir = cache_path.parent
     if not cache_dir.exists():
-        cache_dir.mkdir(parents=True)
-        print(f"Created cache directory: {cache_dir}")
+        raise Exception(
+            f"Cache directory {cache_dir} does not exist and could not be created."
+        )
     try:
         data = metadata_to_dict(metadata)
         print(f"Saving cache for {metadata.path.name} to {cache_path}")
