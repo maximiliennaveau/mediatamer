@@ -112,11 +112,10 @@ def extract_all_metadata(
         print("Extracting OpenSubtitles metadata... Done")
 
     # Credits
-    if not metadata.cast_profile:
-        print("Extracting credits metadata...")
-        extract_credits(metadata, config)
-        save_metadata(metadata, config)
-        print("Extracting cast profile... Done")
+    print("Extracting credits metadata...")
+    extract_credits(metadata, config)
+    save_metadata(metadata, config)
+    print("Extracting cast profile... Done")
 
     # Search OVDB with the credits informations
     if not metadata.ovdb or redo_ovdb_and_ai:
