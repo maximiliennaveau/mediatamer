@@ -41,8 +41,6 @@ class AIVideoMatcher:
             meta.ai_match = ovdb_result
             return
 
-        assert False
-
         # ── Step 1: LLM iterative agentic loop (fallback) ────────────────────
         search_history = []
         max_iterations = 8
