@@ -97,8 +97,21 @@ def main():
         print(output_data)
 
     output_root.mkdir(parents=True, exist_ok=True)
+    # If metadata file already exists, load and merge instead of overwriting.
+    existing_data = {}
+    if output_json_path.exists() and output_json_path.is_file():
+        try:
+            with open(output_json_path, "r", encoding="utf-8") as f:
+                existing_data = json.load(f) or {}
+            if not isinstance(existing_data, dict):
+                existing_data = {}
+        except Exception:
+            existing_data = {}
+    # Merge existing entries with newly discovered ones. New values override old.
+    merged_data = existing_data.copy()
+    merged_data.update(output_data)
     with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(output_data, f, indent=4)
+        json.dump(merged_data, f, indent=4)
     print("\nDone. Files organized under:", output_root)
 
 
