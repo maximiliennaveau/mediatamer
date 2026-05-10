@@ -62,14 +62,9 @@ def main():
 
     files = extract_files_to_process(input_root)
     for f in files:
-        try:
-            print(f"Extracting metadata for {f}...")
-            meta = VideoMetadata(path=f)
-            meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
-        except Exception as e:
-            print(f"Error extracting metadata for {f}:\n{e}")
-            continue
-
+        print(f"Extracting metadata for {f}...")
+        meta = VideoMetadata(path=f)
+        meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
         if not meta.final_result:
             print(f"Failed to extract metadata for {f}. Skipping.")
             continue
