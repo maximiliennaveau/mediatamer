@@ -183,8 +183,8 @@ class VideoCreditsExtractor:
 
         # Scale windows with episode length, capped at the hard limits.
         # This prevents over-scanning short episodes and under-scanning long ones.
-        start_window = max(self.start_duration, duration * self.start_fraction)
-        end_window = max(self.end_duration, duration * self.end_fraction)
+        start_window = duration * self.start_fraction
+        end_window = duration * self.end_fraction
 
         # Build ranges, ensuring the two windows never overlap.
         end_start = max(start_window, duration - end_window)
