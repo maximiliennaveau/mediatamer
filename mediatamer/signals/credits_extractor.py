@@ -157,14 +157,15 @@ class VideoCreditsExtractor:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.fps = self.config.get("credits-scan-fps", 0.2)  # 1 frame every 5 seconds
-        # Hard caps (seconds) — windows will never exceed these values
-        self.start_duration = self.config.get("credits-start-duration", 120)
-        self.end_duration = self.config.get("credits-end-duration", 300)
-        # Fraction of total episode duration — windows scale with content length.
-        # Effective window = min(hard_cap, duration × fraction).
-        # Defaults: 8 % for opening, 18 % for closing.
-        self.start_fraction = self.config.get("credits-start-fraction", 0.2)
-        self.end_fraction = self.config.get("credits-end-fraction", 0.2)
+        self.start_fraction = self.config.get("credits-start-fraction", -1.0)
+        self.end_fraction = self.config.get("credits-end-fraction", -1.0)
+        if (
+            self.start_fraction + self.end_fraction >= 1.0
+            or self.start_fraction < 0
+            or self.end_fraction < 0
+        ):
+            self.start_fraction = 1.0
+            self.end_fraction = 0.0
 
     def extract(self, meta: VideoMetadata) -> CastProfile:
         """
@@ -182,8 +183,8 @@ class VideoCreditsExtractor:
 
         # Scale windows with episode length, capped at the hard limits.
         # This prevents over-scanning short episodes and under-scanning long ones.
-        start_window = min(self.start_duration, duration * self.start_fraction)
-        end_window = min(self.end_duration, duration * self.end_fraction)
+        start_window = max(self.start_duration, duration * self.start_fraction)
+        end_window = max(self.end_duration, duration * self.end_fraction)
 
         # Build ranges, ensuring the two windows never overlap.
         end_start = max(start_window, duration - end_window)
@@ -199,7 +200,7 @@ class VideoCreditsExtractor:
             f"[Credits Extractor] Scanning video frames for credits in {len(ranges)} ranges:\n\t{ranges}"
         )
 
-        total_scan_duration = sum(end - start for start, end in ranges)
+        total_scan_duration = sum(abs(end - start) for start, end in ranges)
         # use meta.cast_profile["ocr_cache"]
         cached = meta.cast_profile.get("ocr_cache", {})
         if cached and cached.get("scanned_duration", 0) >= total_scan_duration:
@@ -233,7 +234,12 @@ class VideoCreditsExtractor:
                 attr,
                 self._validate_names(getattr(cast_profile, attr)),
             )
-        return cast_profile.to_dict()
+        result = cast_profile.to_dict()
+        # Preserve the ocr_cache so it survives the assignment back to
+        # meta.cast_profile and is available on the next call.
+        if "ocr_cache" in meta.cast_profile:
+            result["ocr_cache"] = meta.cast_profile["ocr_cache"]
+        return result
 
     def _extract_text_from_frames(
         self, video_path: Path, ranges: List[Tuple[float, float]]
