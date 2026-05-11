@@ -647,7 +647,9 @@ to refine your identification.
 {summary_content}
 
 ### CAST PROFILE
-{json.dumps(meta.cast_profile.to_dict() if hasattr(meta.cast_profile, "to_dict") else meta.cast_profile, indent=2)}
+real_actors = {meta.cast_profile["real_actors"]}
+crew_names = {meta.cast_profile["crew_names"]}
+fictional_characters = {meta.cast_profile["fictional_characters"]}
         """
 
         # 4. Search Commands

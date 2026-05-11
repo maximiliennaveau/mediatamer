@@ -3,6 +3,7 @@ import os
 import tempfile
 import json
 import re
+import math
 import difflib
 import shutil
 import requests
@@ -17,7 +18,7 @@ except ImportError:
 
 from mediatamer.ai import run_ai
 from mediatamer.signals.video_metadata import VideoMetadata
-from mediatamer.signals.cast_from_subtitles import CastProfile, _build_cast_prompt
+from mediatamer.signals.cast_from_subtitles import _build_cast_prompt
 
 # Valid human name: 2+ words, only letters (incl. accented), hyphens, apostrophes, periods
 _NAME_RE = re.compile(
@@ -156,9 +157,9 @@ class VideoCreditsExtractor:
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
-        self.fps = self.config.get("credits-scan-fps", 0.2)  # 1 frame every 5 seconds
-        self.start_fraction = self.config.get("credits-start-fraction", -1.0)
-        self.end_fraction = self.config.get("credits-end-fraction", -1.0)
+        self.fps = self.config.get("credits-scan-fps", 0.5)  # 1 frame every 2 seconds
+        self.start_fraction = self.config.get("credits-start-fraction", 0.02)
+        self.end_fraction = self.config.get("credits-end-fraction", 0.15)
         if (
             self.start_fraction + self.end_fraction >= 1.0
             or self.start_fraction < 0
@@ -167,18 +168,19 @@ class VideoCreditsExtractor:
             self.start_fraction = 1.0
             self.end_fraction = 0.0
 
-    def extract(self, meta: VideoMetadata) -> CastProfile:
+    def extract(self, meta: VideoMetadata) -> dict:
         """
         Extracts credits from video frames and returns a CastProfile.
         """
         if not pytesseract or not shutil.which("tesseract"):
             print("[Credits Extractor] Tesseract not found. Skipping.")
-            return CastProfile()
+            return {}
 
         if not meta.technical or not meta.technical["duration"]:
             print("[Credits Extractor] Video duration unknown. Skipping.")
-            return CastProfile()
+            return {}
 
+        result = {}
         duration = meta.technical["duration"]
 
         # Scale windows with episode length, capped at the hard limits.
@@ -188,9 +190,10 @@ class VideoCreditsExtractor:
 
         # Build ranges, ensuring the two windows never overlap.
         end_start = max(start_window, duration - end_window)
+        end_duration = duration - end_start
         ranges = [
             (0, start_window),
-            (end_start, duration),
+            (end_start, end_duration),
         ]
         # Deduplicate when the two ranges collapse into one (very short content)
         if end_start <= start_window:
@@ -202,43 +205,58 @@ class VideoCreditsExtractor:
 
         total_scan_duration = sum(abs(end - start) for start, end in ranges)
         # use meta.cast_profile["ocr_cache"]
-        cached = meta.cast_profile.get("ocr_cache", {})
-        if cached and cached.get("scanned_duration", 0) >= total_scan_duration:
-            print(
-                f"[Credits Extractor] Using cached OCR text "
-                f"(cached: {cached['scanned_duration']:.1f}s"
-                f" >= requested: {total_scan_duration:.1f}s)"
-            )
-            raw_text = cached["raw_text"]
-        else:
+        result["ocr_cache"] = meta.cast_profile.get("ocr_cache", {})
+        is_cache_loaded = not bool(result["ocr_cache"])
+        is_fps_higher_than_cached = self.fps > result["ocr_cache"].get("scanned_fps", 0)
+        is_duration_ask_greater_than_cached = total_scan_duration - 0.1 >= result[
+            "ocr_cache"
+        ].get("scanned_duration", 0)
+        print(
+            f"[Credits Extractor] Cache status: {'miss' if is_cache_loaded else 'hit'}, "
+            f"asked duration: {total_scan_duration:.1f}s, "
+            f"cached duration: {result['ocr_cache'].get('scanned_duration', 0):.1f}s, "
+            f"asked FPS: {self.fps}, "
+            f"cached FPS: {result['ocr_cache'].get('scanned_fps', 0)}, "
+            f"Running OCR: {'yes' if is_cache_loaded or is_duration_ask_greater_than_cached or is_fps_higher_than_cached else 'no'}"
+        )
+        if (
+            is_cache_loaded
+            or is_duration_ask_greater_than_cached
+            or is_fps_higher_than_cached
+        ):
             print("[Credits Extractor] Running OCR on video frames...")
             raw_text = self._extract_text_from_frames(meta.path, ranges)
-            if raw_text.strip():
-                meta.cast_profile["ocr_cache"] = {
-                    "scanned_duration": total_scan_duration,
-                    "raw_text": raw_text,
-                }
+            if not raw_text.strip():
+                print(
+                    "[Credits Extractor] No text extracted from frames. Skipping AI refinement."
+                )
+                return {}
+            filtered_text = self._filter_ocr_text(raw_text)
+            if not filtered_text.strip():
+                print(
+                    "[Credits Extractor] No text remaining after filtering. Skipping AI refinement."
+                )
+                return {}
+            result["ocr_cache"] = {
+                "scanned_duration": total_scan_duration,
+                "raw_text": raw_text,
+                "filtered_text": filtered_text,
+                "scanned_fps": self.fps,
+            }
             print("[Credits Extractor] Running OCR on video frames... Done.")
-
-        if not raw_text.strip():
-            return CastProfile()
-
-        filtered_text = self._filter_ocr_text(raw_text)
-        if not filtered_text.strip():
-            return CastProfile()
-
-        cast_profile = self._refine_with_ai(filtered_text)
-        for attr in ("real_actors", "crew_names", "fictional_characters"):
-            setattr(
-                cast_profile,
-                attr,
-                self._validate_names(getattr(cast_profile, attr)),
+        else:
+            print(
+                f"[Credits Extractor] Using cached OCR data. Scanned duration: {result['ocr_cache'].get('scanned_duration', 0)}"
             )
-        result = cast_profile.to_dict()
-        # Preserve the ocr_cache so it survives the assignment back to
-        # meta.cast_profile and is available on the next call.
-        if "ocr_cache" in meta.cast_profile:
-            result["ocr_cache"] = meta.cast_profile["ocr_cache"]
+
+        print("[Credits Extractor] Refining cast profile with AI...")
+        cast_profile = self._refine_with_ai(result["ocr_cache"]["filtered_text"])
+        print("[Credits Extractor] Refining cast profile with AI... Done.")
+        # Validate and canonicalize names, with online lookup and session caching.
+        print("[Credits Extractor] Validating and canonicalizing names...")
+        for attr in ("real_actors", "crew_names", "fictional_characters"):
+            result[attr] = self._validate_names(cast_profile.get(attr, []))
+        print("[Credits Extractor] Validating and canonicalizing names... Done.")
         return result
 
     def _extract_text_from_frames(
@@ -262,6 +280,12 @@ class VideoCreditsExtractor:
                     f"lutyuv=y='if(gt(val,128),255,0)',negate"
                 )
 
+                out_pattern = os.path.join(tmpdir, f"range_{i}_%04d.png")
+                expected_count = int(math.ceil(self.fps * dur)) if self.fps > 0 else 0
+                print(
+                    f"[Credits Extractor] Extracting ~{expected_count} image(s) for range {i} into {out_pattern}"
+                )
+
                 cmd = [
                     "ffmpeg",
                     "-loglevel",
@@ -276,17 +300,24 @@ class VideoCreditsExtractor:
                     filter_chain,
                     "-f",
                     "image2",
-                    os.path.join(tmpdir, f"range_{i}_%04d.png"),
+                    out_pattern,
                 ]
 
                 try:
-                    subprocess.run(cmd, check=True, timeout=120)
+                    subprocess.run(cmd, check=True, timeout=60 * 5)
                 except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                     print(f"[Credits Extractor] FFmpeg error/timeout in range {i}: {e}")
                     continue
 
             # Process extracted images
             images = sorted([f for f in os.listdir(tmpdir) if f.endswith(".png")])
+            if images:
+                print(
+                    f"[Credits Extractor] Extracted {len(images)} image(s) to {tmpdir}"
+                )
+            else:
+                print(f"[Credits Extractor] No images extracted to {tmpdir}")
+
             for img_name in images:
                 try:
                     img_path = os.path.join(tmpdir, img_name)
@@ -375,7 +406,7 @@ class VideoCreditsExtractor:
                 kept.append(name)
         return kept
 
-    def _refine_with_ai(self, raw_text: str) -> CastProfile:
+    def _refine_with_ai(self, raw_text: str) -> dict:
         """
         Use the LLM to clean up the noisy OCR text into a structured profile.
         """
@@ -385,7 +416,7 @@ class VideoCreditsExtractor:
         response = run_ai(prompt, self.config, json_mode=True)
         try:
             data = json.loads(response)
-            return CastProfile.from_dict(data)
+            return data
         except Exception as e:
             print(f"[Credits Extractor] AI parsing error: {e}")
-            return CastProfile()
+            return {}
