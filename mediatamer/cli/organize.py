@@ -106,7 +106,7 @@ def main():
     merged_data = existing_data.copy()
     merged_data.update(output_data)
     with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(merged_data, f, indent=4)
+        json.dump(merged_data, f, indent=4, sort_keys=True)
     print("\nDone. Files organized under:", output_root)
 
 
