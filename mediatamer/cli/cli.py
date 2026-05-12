@@ -15,8 +15,8 @@ import argcomplete
 import argparse
 from typing import Any
 from mediatamer.cli.organize import get_argument_parser as get_organize_parser
-from mediatamer.cli.compress import get_agument_parser as get_compress_parser
-from mediatamer.cli.metadata import get_agument_parser as get_metadata_parser
+from mediatamer.cli.compress import get_argument_parser as get_compress_parser
+from mediatamer.cli.metadata import get_argument_parser as get_metadata_parser
 from mediatamer.cli.validate import get_validate_parser
 from mediatamer.config import load_config
 

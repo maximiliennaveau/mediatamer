@@ -1,146 +1,17 @@
 """Compress module for MediaTamer (converts videos to optimal format for Jellyfin streaming on DS418 NAS)."""
 
 import argparse
-import subprocess
-import re
 import shutil
 from pathlib import Path
-from typing import Optional
 
 try:
     import argcomplete
 except ImportError:
     argcomplete = None
 from mediatamer.cli.argparse_utils import add_common_arguments
-from mediatamer.utils import extract_files_to_process, detect_language
-
-
-def find_external_srt(base: Path) -> Optional[Path]:
-    """Find external SRT file with same base name."""
-    suffixes = ["", ".vostfr", ".VOSTFR", ".fr", ".FR", ".fra", ".FRA"]
-    suffixes += [".eng", ".ENG", ".en", ".EN", ".english", ".ENGLISH"]
-    for suf in suffixes:
-        srt_path = base.with_suffix(f"{suf}.srt")
-        if srt_path.exists():
-            return srt_path
-    return None
-
-
-def find_embedded_sub(infile: Path) -> Optional[str]:
-    """Scan for embedded non-PGS subtitle track, preferring English then French."""
-    try:
-        cmd = ["HandBrakeCLI", "-i", str(infile), "--scan"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        scan_out = result.stdout + result.stderr
-        # Look for subtitle lines not PGS
-        lines = scan_out.split("\n")
-        candidates = []
-        for line in lines:
-            if "subtitle" in line.lower() and "pgs" not in line.lower():
-                candidates.append(line)
-        # Prefer English
-        english_subs = [
-            line for line in candidates if re.search(r"\b(eng|english)\b", line, re.I)
-        ]
-        if english_subs:
-            match = re.search(r"track\s*(\d+)", english_subs[0], re.I)
-            if match:
-                return match.group(1)
-        # Then French
-        french_subs = [
-            line
-            for line in candidates
-            if re.search(r"\b(fra|fre|french|vost)\b", line, re.I)
-        ]
-        if french_subs:
-            match = re.search(r"track\s*(\d+)", french_subs[0], re.I)
-            if match:
-                return match.group(1)
-    except Exception:
-        pass
-    return None
-
-
-def get_srt_lang(srt_path: Path) -> str:
-    """Detect language of an SRT file and return a 3-letter ISO639-2 code.
-
-    Falls back to 'eng' on error or unknown language.
-    """
-    try:
-        lines = []
-        with open(srt_path, "r", encoding="utf-8", errors="ignore") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line:
-                    continue
-                # Skip numeric indices
-                if re.match(r"^\d+$", line):
-                    continue
-                # Skip timestamp lines like 00:00:01,000 --> 00:00:04,000
-                if re.match(
-                    r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*--?>\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}",
-                    line,
-                ):
-                    continue
-                lines.append(line)
-                if len(lines) >= 200:
-                    break
-        text = " ".join(lines)
-        lang = detect_language(text)
-        iso_map = {
-            "en": "eng",
-            "fr": "fra",
-            "es": "spa",
-            "de": "deu",
-            "it": "ita",
-            "pt": "por",
-            "zh": "zho",
-            "ja": "jpn",
-            "ru": "rus",
-            "ar": "ara",
-            "nl": "nld",
-            "sv": "swe",
-            "no": "nor",
-            "pl": "pol",
-            "ko": "kor",
-            "hi": "hin",
-        }
-        return iso_map.get(lang, "eng")
-    except Exception:
-        return "eng"
-
-
-def build_handbrake_cmd(
-    infile: Path, outfile: Path, srtfile: Optional[Path], embedded_sub: Optional[str]
-) -> list[str]:
-    """Build HandBrakeCLI command for optimal compression on DS418."""
-    # For DS418 (RTD1296, low power), use H.264 instead of H.265 for better compatibility and less CPU
-    # CRF 20 for quality, AAC 192kbps, same framerate/resolution
-    cmd = [
-        "HandBrakeCLI",
-        "-i",
-        str(infile),
-        "-o",
-        str(outfile),
-        "-f",
-        "mkv",
-        "-e",
-        "x264",  # H.264 for lower CPU usage
-        "-q",
-        "20",  # CRF 20
-        "-a",
-        "all",  # Keep all audio tracks
-        "-E",
-        "av_aac,av_aac,av_aac",  # AAC (applies to selected tracks)
-        "-B",
-        "192,192,192",  # 192 kbps (applies to selected tracks)
-        "-s",
-        "all",  # Keep all subtitle tracks
-    ]
-    if srtfile:
-        srt_lang = get_srt_lang(srtfile)
-        cmd.extend(["--srt-file", str(srtfile), "--srt-lang", srt_lang])
-    return cmd
+from mediatamer.utils import extract_files_to_process
+from mediatamer.parameters import get_extensions
+from mediatamer.compress import compress_file
 
 
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -167,6 +38,40 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
         "--no-embedded", action="store_true", help="Do not include embedded subtitles"
     )
     parser.add_argument("--exts", nargs="*", help="Video extensions to process")
+    parser.add_argument(
+        "--crf",
+        type=int,
+        default=18,
+        help="CRF value for libx264 (lower => better quality, slower).",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=(
+            "ultrafast",
+            "superfast",
+            "veryfast",
+            "faster",
+            "fast",
+            "medium",
+            "slow",
+            "slower",
+            "veryslow",
+        ),
+        default="slow",
+        help="x264 preset (slower => better compression).",
+    )
+    parser.add_argument(
+        "--tune",
+        choices=("film", "animation", "grain", "stillimage", "psnr", "ssim"),
+        default=None,
+        help="x264 tune parameter (optional)",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("baseline", "main", "high"),
+        default="high",
+        help="x264 profile to signal in the output (default: high)",
+    )
     parser = add_common_arguments(parser)
     if argcomplete:
         argcomplete.autocomplete(parser)
@@ -186,38 +91,53 @@ def main():
         return 0
 
     output_dir = args.output.resolve()
+    # Determine if user passed an output *file* (e.g. -o /tmp/out.mkv)
+    out_is_file = False
+    try:
+        out_suffix = args.output.suffix.lower()
+        exts = {e if e.startswith(".") else f".{e}" for e in get_extensions()}
+        if out_suffix in exts:
+            out_is_file = True
+    except Exception:
+        out_is_file = False
     if args.exts:
         exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.exts}
         files = [p for p in files if p.suffix.lower() in exts]
 
-    # Check HandBrakeCLI
-    if shutil.which("HandBrakeCLI") is None:
-        print("Error: HandBrakeCLI not found in PATH")
+    # Check ffmpeg availability
+    if shutil.which("ffmpeg") is None:
+        print("Error: ffmpeg not found in PATH")
         return 1
 
     for infile in sorted(files):
         if input_path.is_file():
-            outfile = output_dir / infile.with_suffix(".mkv").name
+            outfile = (
+                output_dir
+                if out_is_file
+                else output_dir / infile.with_suffix(".mkv").name
+            )
         else:
             outfile = output_dir / infile.relative_to(input_path).with_suffix(".mkv")
         if args.apply:
             outfile.parent.mkdir(parents=True, exist_ok=True)
 
-        base = infile.with_suffix("")
-        srtfile = find_external_srt(base)
-        embedded_sub = None
-        if not srtfile and not args.no_embedded:
-            embedded_sub = find_embedded_sub(infile)
-
-        cmd = build_handbrake_cmd(infile, outfile, srtfile, embedded_sub)
+        cmd, result = compress_file(
+            infile,
+            outfile,
+            crf=args.crf,
+            preset=args.preset,
+            tune=args.tune,
+            profile=args.profile,
+            apply=args.apply,
+        )
 
         print(f"Converting: {infile} -> {outfile}")
         if not args.apply:
             print(f"DRY RUN: {' '.join(cmd)}")
         else:
-            result = subprocess.run(cmd)
-            if result.returncode != 0:
-                print(f"Failed: {infile} (exit {result.returncode})")
+            if result is None or result.returncode != 0:
+                code = None if result is None else result.returncode
+                print(f"Failed: {infile} (exit {code})")
 
     print("Done.")
 

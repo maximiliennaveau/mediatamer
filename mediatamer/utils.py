@@ -4,7 +4,6 @@ from pathlib import Path
 from langdetect import detect
 import re
 
-from mediatamer.config import load_config
 from mediatamer.parameters import get_extensions
 
 
