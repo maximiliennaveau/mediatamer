@@ -10,7 +10,7 @@ from mediatamer.utils import extract_files_to_process
 from mediatamer.cli.argparse_utils import add_common_arguments
 
 
-def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
         "-i", "--input", type=Path, default=Path.cwd(), help="Input directory to scan"
     )
