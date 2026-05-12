@@ -8,7 +8,7 @@ import argparse
 import argcomplete
 
 from mediatamer.config import load_config
-from mediatamer.signals.video_metadata import VideoMetadata, metadata_to_dict
+from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.extract_metada import extract_all_metadata
 from mediatamer.cli.argparse_utils import add_common_arguments
 from mediatamer.utils import (
@@ -56,6 +56,7 @@ def main():
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
 
     output_json_path = output_root / "metadata.json"
     output_data = {}
@@ -91,22 +92,21 @@ def main():
         output_data[str(f)] = output
         print(output_data)
 
-    output_root.mkdir(parents=True, exist_ok=True)
-    # If metadata file already exists, load and merge instead of overwriting.
-    existing_data = {}
-    if output_json_path.exists() and output_json_path.is_file():
-        try:
-            with open(output_json_path, "r", encoding="utf-8") as f:
-                existing_data = json.load(f) or {}
-            if not isinstance(existing_data, dict):
+        # Update metadata file.
+        existing_data = {}
+        if output_json_path.exists() and output_json_path.is_file():
+            try:
+                with open(output_json_path, "r", encoding="utf-8") as f:
+                    existing_data = json.load(f) or {}
+                if not isinstance(existing_data, dict):
+                    existing_data = {}
+            except Exception:
                 existing_data = {}
-        except Exception:
-            existing_data = {}
-    # Merge existing entries with newly discovered ones. New values override old.
-    merged_data = existing_data.copy()
-    merged_data.update(output_data)
-    with open(output_json_path, "w", encoding="utf-8") as f:
-        json.dump(merged_data, f, indent=4, sort_keys=True)
+        # Merge existing entries with newly discovered ones. New values override old.
+        merged_data = existing_data.copy()
+        merged_data.update(output_data)
+        with open(output_json_path, "w", encoding="utf-8") as f:
+            json.dump(merged_data, f, indent=4, sort_keys=True)
     print("\nDone. Files organized under:", output_root)
 
 
