@@ -32,7 +32,6 @@
         ];
         propagatedBuildInputs = [
           pkgs.ffmpeg
-          pkgs.handbrake
           pkgs.tesseract
           pkgs.python3Packages.argcomplete
           pkgs.python3Packages.requests
