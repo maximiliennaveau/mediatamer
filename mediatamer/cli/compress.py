@@ -3,6 +3,7 @@
 import argparse
 import subprocess
 import re
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -11,8 +12,7 @@ try:
 except ImportError:
     argcomplete = None
 from mediatamer.cli.argparse_utils import add_common_arguments
-
-VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".ts", ".mpg", ".mpeg", ".flv"}
+from mediatamer.utils import extract_files_to_process, detect_language
 
 
 def find_external_srt(base: Path) -> Optional[Path]:
@@ -23,10 +23,6 @@ def find_external_srt(base: Path) -> Optional[Path]:
         srt_path = base.with_suffix(f"{suf}.srt")
         if srt_path.exists():
             return srt_path
-    # Also check plain .srt
-    srt_path = base.with_suffix(".srt")
-    if srt_path.exists():
-        return srt_path
     return None
 
 
@@ -52,7 +48,9 @@ def find_embedded_sub(infile: Path) -> Optional[str]:
                 return match.group(1)
         # Then French
         french_subs = [
-            line for line in candidates if re.search(r"\b(fra|fre|french|vost)\b", line, re.I)
+            line
+            for line in candidates
+            if re.search(r"\b(fra|fre|french|vost)\b", line, re.I)
         ]
         if french_subs:
             match = re.search(r"track\s*(\d+)", french_subs[0], re.I)
@@ -61,6 +59,55 @@ def find_embedded_sub(infile: Path) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def get_srt_lang(srt_path: Path) -> str:
+    """Detect language of an SRT file and return a 3-letter ISO639-2 code.
+
+    Falls back to 'eng' on error or unknown language.
+    """
+    try:
+        lines = []
+        with open(srt_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                # Skip numeric indices
+                if re.match(r"^\d+$", line):
+                    continue
+                # Skip timestamp lines like 00:00:01,000 --> 00:00:04,000
+                if re.match(
+                    r"^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*--?>\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}",
+                    line,
+                ):
+                    continue
+                lines.append(line)
+                if len(lines) >= 200:
+                    break
+        text = " ".join(lines)
+        lang = detect_language(text)
+        iso_map = {
+            "en": "eng",
+            "fr": "fra",
+            "es": "spa",
+            "de": "deu",
+            "it": "ita",
+            "pt": "por",
+            "zh": "zho",
+            "ja": "jpn",
+            "ru": "rus",
+            "ar": "ara",
+            "nl": "nld",
+            "sv": "swe",
+            "no": "nor",
+            "pl": "pol",
+            "ko": "kor",
+            "hi": "hin",
+        }
+        return iso_map.get(lang, "eng")
+    except Exception:
+        return "eng"
 
 
 def build_handbrake_cmd(
@@ -82,24 +129,27 @@ def build_handbrake_cmd(
         "-q",
         "20",  # CRF 20
         "-a",
-        "1,2,3",  # First and second audio tracks
+        "all",  # Keep all audio tracks
         "-E",
-        "av_aac,av_aac,av_aac",  # AAC for all three
+        "av_aac,av_aac,av_aac",  # AAC (applies to selected tracks)
         "-B",
-        "192,192,192",  # 192 kbps for all three
+        "192,192,192",  # 192 kbps (applies to selected tracks)
         "-s",
-        "1,2,3",  # Include first subtitle track if available
+        "all",  # Keep all subtitle tracks
     ]
     if srtfile:
-        cmd.extend(["--srt-file", str(srtfile), "--srt-lang", "eng"])
-    elif embedded_sub:
-        cmd.extend(["-s", embedded_sub])
+        srt_lang = get_srt_lang(srtfile)
+        cmd.extend(["--srt-file", str(srtfile), "--srt-lang", srt_lang])
     return cmd
 
 
-def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument(
-        "--input", "-i", type=Path, required=True, help="Input directory to scan"
+        "--input",
+        "-i",
+        type=Path,
+        default=Path.cwd(),
+        help="Input directory or file to scan",
     )
     parser.add_argument(
         "--output",
@@ -118,7 +168,8 @@ def get_agument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
     )
     parser.add_argument("--exts", nargs="*", help="Video extensions to process")
     parser = add_common_arguments(parser)
-    argcomplete.autocomplete(parser)
+    if argcomplete:
+        argcomplete.autocomplete(parser)
     return parser
 
 
@@ -126,40 +177,29 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compress video files for optimal Jellyfin streaming on DS418 NAS"
     )
-    parser = get_agument_parser(parser)
+    parser = get_argument_parser(parser)
     args = parser.parse_args()
 
-    input_dir = args.input.resolve()
-    if not input_dir.is_dir():
-        print(f"Error: {input_dir} is not a directory")
-        return 1
+    input_path = args.input.resolve()
+    files = extract_files_to_process(input_path) or []
+    if not files:
+        return 0
 
-    output_dir = args.output.resolve() if args.output else input_dir / "compressed"
-    exts = {
-        e.lower() if e.startswith(".") else f".{e.lower()}"
-        for e in (args.exts or VIDEO_EXTS)
-    }
+    output_dir = args.output.resolve()
+    if args.exts:
+        exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.exts}
+        files = [p for p in files if p.suffix.lower() in exts]
 
     # Check HandBrakeCLI
-    if (
-        not subprocess.run(["which", "HandBrakeCLI"], capture_output=True).returncode
-        == 0
-    ):
+    if shutil.which("HandBrakeCLI") is None:
         print("Error: HandBrakeCLI not found in PATH")
         return 1
 
-    # Find all video files
-    files = [
-        p for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in exts
-    ]
-
-    if not files:
-        print("No video files found")
-        return 0
-
     for infile in sorted(files):
-        rel_path = infile.relative_to(input_dir)
-        outfile = output_dir / rel_path.with_suffix(".mkv")
+        if input_path.is_file():
+            outfile = output_dir / infile.with_suffix(".mkv").name
+        else:
+            outfile = output_dir / infile.relative_to(input_path).with_suffix(".mkv")
         if args.apply:
             outfile.parent.mkdir(parents=True, exist_ok=True)
 
