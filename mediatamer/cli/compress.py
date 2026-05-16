@@ -131,6 +131,10 @@ def main():
             apply=args.apply,
         )
 
+        if not cmd:
+            print(f"Skipping (already H.264): {infile}")
+            continue
+
         print(f"Converting: {infile} -> {outfile}")
         if not args.apply:
             print(f"DRY RUN: {' '.join(cmd)}")

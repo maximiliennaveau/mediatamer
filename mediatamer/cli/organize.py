@@ -1,16 +1,18 @@
 """Organize module for MediaTamer."""
 
 import json
+import shutil
 from pathlib import Path
 import argparse
 
-# from shutil import move, copy2
 import argcomplete
 
 from mediatamer.config import load_config
 from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.extract_metada import extract_all_metadata
 from mediatamer.cli.argparse_utils import add_common_arguments
+from mediatamer.compress import compress_file
+from mediatamer.mkv_metadata import write_mkv_metadata
 from mediatamer.utils import (
     sanitize_filename,
     zero_pad,
@@ -26,18 +28,47 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
         "--output",
         "-o",
         type=Path,
-        default=Path.cwd() / "Jellyfin_Organized",
+        default=Path.cwd().parent / "jellyfin_organized",
         help="Output root",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Actually move/copy files. If not set, runs as dry-run and prints actions",
+        help="Actually compress and write metadata. If not set, runs as dry-run.",
     )
     parser.add_argument(
-        "--move",
-        action="store_true",
-        help="Move files instead of copying when --apply is used",
+        "--crf",
+        type=int,
+        default=18,
+        help="CRF value for libx264 (lower => better quality, slower).",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=(
+            "ultrafast",
+            "superfast",
+            "veryfast",
+            "faster",
+            "fast",
+            "medium",
+            "slow",
+            "slower",
+            "veryslow",
+        ),
+        default="veryslow",
+        help="x264 preset (slower => better compression).",
+    )
+    parser.add_argument(
+        "--tune",
+        choices=("film", "animation", "grain", "stillimage", "psnr", "ssim"),
+        default="film",
+        help="x264 tune parameter (optional).",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("baseline", "main", "high"),
+        default="high",
+        help="x264 profile (default: high).",
     )
     parser = add_common_arguments(parser)
     return parser
@@ -45,69 +76,136 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Organize video files into Jellyfin layout (Show/Season XX/Show - SXXEXX.ext - Title)"
+        description=(
+            "Master organizer: find metadata, compress to H.264 MKV, "
+            "and burn metadata tags — ready for Jellyfin."
+        )
     )
     parser = get_argument_parser(parser)
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
 
-    # Load config
+    dry_run = not args.apply
+    if dry_run:
+        print("[DRY RUN] No files will be written. Pass --apply to execute.\n")
+
     config = load_config(args.config)
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
+
+    if args.apply:
+        output_root.mkdir(parents=True, exist_ok=True)
 
     output_json_path = output_root / "metadata.json"
     output_data = {}
 
     files = extract_files_to_process(input_root)
-    for f in files:
-        print(f"Extracting metadata for {f}...")
-        meta = VideoMetadata(path=f)
+    for video_file in files:
+        print(f"Processing: {video_file}")
+
+        # --- Step 1: find metadata ---
+        print("  [1/3] Extracting metadata...")
+        meta = VideoMetadata(path=video_file)
         meta = extract_all_metadata(meta, config, no_cache=args.no_cache)
         if not meta.final_result:
-            print(f"Failed to extract metadata for {f}. Skipping.")
+            print("  Failed to extract metadata. Skipping.\n")
             continue
 
-        print(f"Extracted metadata for {f}:")
-        print(f"\t- Series name: {meta.final_result['series_full_name']}")
-        print(f"\t- Episode title: {meta.final_result['name']}")
-        print(f"\t- Season number: {meta.final_result['seasonNumber']}")
-        print(f"\t- Episode number: {meta.final_result['number']}")
+        fr = meta.final_result
+        print(f"  Series:  {fr['series_full_name']}")
+        print(f"  Title:   {fr['name']}")
+        print(f"  Season:  {fr['seasonNumber']}")
+        print(f"  Episode: {fr['number']}")
 
-        output_path = str(
+        output_path = (
             output_root
-            / meta.final_result["series_full_name"]
-            / f"Season {zero_pad(meta.final_result['seasonNumber'])}"
-            / f"{sanitize_filename(meta.final_result['series_full_name'])} - "
-            f"S{zero_pad(meta.final_result['seasonNumber'])}"
-            f"E{zero_pad(meta.final_result['number'])} - "
-            f"{meta.final_result['name']}"
-            f"{meta.path.suffix.lower()}"
+            / sanitize_filename(fr["series_full_name"])
+            / f"Season {zero_pad(fr['seasonNumber'])}"
+            / (
+                f"{sanitize_filename(fr['series_full_name'])} - "
+                f"S{zero_pad(fr['seasonNumber'])}"
+                f"E{zero_pad(fr['number'])} - "
+                f"{sanitize_filename(fr['name'])}"
+                ".mkv"
+            )
+        )
+        output_data[str(video_file)] = {"output_path": str(output_path)}
+
+        # --- Step 2: compress ---
+        print(f"  [2/3] Compress -> {output_path}")
+        if args.apply:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd, result = compress_file(
+            video_file,
+            output_path,
+            crf=args.crf,
+            preset=args.preset,
+            tune=args.tune,
+            profile=args.profile,
+            apply=args.apply,
         )
 
-        output = {}
-        output["output_path"] = output_path
-        output_data[str(f)] = output
-        print(output_data)
+        if not cmd:
+            # Already H.264 — copy to destination when applying
+            print("  Already H.264, skipping re-encode.")
+            if args.apply and not output_path.exists():
+                print(f"  Copying {video_file} -> {output_path}")
+                shutil.copy2(video_file, output_path)
+        elif dry_run:
+            print(f"  DRY RUN ffmpeg: {' '.join(cmd)}")
+        elif result is not None and result.returncode != 0:
+            print(
+                f"  Compression failed (exit {result.returncode}). Skipping metadata burn.\n"
+            )
+            continue
 
-        # Update metadata file.
-        existing_data = {}
-        if output_json_path.exists() and output_json_path.is_file():
+        # --- Step 3: burn metadata into the MKV ---
+        print("  [3/3] Burning metadata into MKV...")
+        if args.apply:
+            if output_path.exists():
+                ok = write_mkv_metadata(output_path, meta)
+                if ok:
+                    print("  Metadata written successfully.")
+                else:
+                    print("  Failed to write metadata.")
+            else:
+                print("  Output file not found, skipping metadata burn.")
+        else:
             try:
-                with open(output_json_path, "r", encoding="utf-8") as f:
-                    existing_data = json.load(f) or {}
+                season = int(fr["seasonNumber"])
+                episode = int(fr["number"])
+                title = f"{fr['series_full_name']} - S{season:02d}E{episode:02d} - {fr['name']}"
+            except Exception:
+                title = fr.get("name", output_path.stem)
+            print(
+                f"  DRY RUN mkvpropedit: would write title='{title}' and episode tags."
+            )
+
+        print()
+
+    # Save JSON manifest when applying
+    if args.apply and output_data:
+        existing_data = {}
+        if output_json_path.exists():
+            try:
+                with open(output_json_path, "r", encoding="utf-8") as fh:
+                    existing_data = json.load(fh) or {}
                 if not isinstance(existing_data, dict):
                     existing_data = {}
             except Exception:
                 existing_data = {}
-        # Merge existing entries with newly discovered ones. New values override old.
-        merged_data = existing_data.copy()
-        merged_data.update(output_data)
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(merged_data, f, indent=4, sort_keys=True)
-    print("\nDone. Files organized under:", output_root)
+        merged_data = {**existing_data, **output_data}
+        with open(output_json_path, "w", encoding="utf-8") as fh:
+            json.dump(merged_data, fh, indent=4, sort_keys=True)
+        print(f"Metadata manifest saved: {output_json_path}")
+
+    print(
+        "\nDone."
+        if not dry_run
+        else "\nDry run complete. Pass --apply to process files."
+    )
 
 
 if __name__ == "__main__":

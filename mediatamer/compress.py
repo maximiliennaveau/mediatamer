@@ -105,6 +105,44 @@ def count_subtitle_streams(path: Path) -> int:
         return 0
 
 
+def is_already_compressed(path: Path, profile: Optional[str] = None) -> bool:
+    """Return True if the first video stream is already H.264-encoded.
+
+    Uses ffprobe to inspect the codec (and optionally the profile) of the
+    first video stream.  Returns False on any error so the caller falls back
+    to re-encoding.
+    """
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,profile",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode != 0:
+            return False
+        output = res.stdout.strip()
+        if not output:
+            return False
+        parts = [p.strip() for p in output.split(",")]
+        if parts[0].lower() != "h264":
+            return False
+        if profile and len(parts) > 1:
+            stream_profile = parts[1].lower().replace(" ", "")
+            if profile.lower().replace(" ", "") not in stream_profile:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def build_ffmpeg_cmd(
     infile: Path,
     outfile: Path,
@@ -164,6 +202,8 @@ def compress_file(
     Returns a tuple of (cmd, result) where ``result`` is the CompletedProcess
     when ``apply`` is True, otherwise ``None``.
     """
+    if is_already_compressed(infile, profile=profile):
+        return [], None
     base = infile.with_suffix("")
     srtfile = find_external_srt(base)
     srt_lang = get_srt_lang(srtfile) if srtfile else None
