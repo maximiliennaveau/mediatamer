@@ -39,8 +39,8 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
     parser.add_argument(
         "--crf",
         type=int,
-        default=18,
-        help="CRF value for libx264 (lower => better quality, slower).",
+        default=20,
+        help="CRF value for libx265 (lower => better quality, slower).",
     )
     parser.add_argument(
         "--preset",
@@ -56,19 +56,26 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
             "veryslow",
         ),
         default="veryslow",
-        help="x264 preset (slower => better compression).",
+        help="x265 preset (slower => better compression).",
     )
     parser.add_argument(
         "--tune",
-        choices=("film", "animation", "grain", "stillimage", "psnr", "ssim"),
-        default="film",
-        help="x264 tune parameter (optional).",
+        choices=("psnr", "ssim", "grain", "zerolatency", "fastdecode", "animation"),
+        default=None,
+        help="x265 tune parameter (optional).",
     )
     parser.add_argument(
         "--profile",
-        choices=("baseline", "main", "high"),
-        default="high",
-        help="x264 profile (default: high).",
+        choices=("main", "main10"),
+        default="main",
+        help="x265 profile (default: main).",
+    )
+    parser.add_argument(
+        "--nvenc",
+        action="store_true",
+        default=False,
+        help="Use NVIDIA NVENC hardware encoder (hevc_nvenc) instead of libx265."
+        " Much faster; requires an NVIDIA GPU with NVENC support.",
     )
     parser = add_common_arguments(parser)
     return parser
@@ -90,6 +97,9 @@ def main():
         print("[DRY RUN] No files will be written. Pass --apply to execute.\n")
 
     config = load_config(args.config)
+    # Config key overrides the CLI default (False), but explicit --nvenc always wins.
+    if not args.nvenc:
+        args.nvenc = config.get("compress-use-nvenc", False)
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
@@ -144,6 +154,7 @@ def main():
             preset=args.preset,
             tune=args.tune,
             profile=args.profile,
+            use_nvenc=args.nvenc,
             apply=args.apply,
         )
 
@@ -185,8 +196,8 @@ def main():
 
         print()
 
-    # Save JSON manifest when applying
-    if args.apply and output_data:
+    # Save JSON manifest in any case for debugging and future use:
+    if output_data:
         existing_data = {}
         if output_json_path.exists():
             try:

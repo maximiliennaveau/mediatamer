@@ -9,9 +9,10 @@ try:
 except ImportError:
     argcomplete = None
 from mediatamer.cli.argparse_utils import add_common_arguments
-from mediatamer.utils import extract_files_to_process
-from mediatamer.parameters import get_extensions
 from mediatamer.compress import compress_file
+from mediatamer.config import load_config
+from mediatamer.parameters import get_extensions
+from mediatamer.utils import extract_files_to_process
 
 
 def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -41,8 +42,8 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
     parser.add_argument(
         "--crf",
         type=int,
-        default=18,
-        help="CRF value for libx264 (lower => better quality, slower).",
+        default=20,
+        help="CRF value for libx265 (lower => better quality, slower).",
     )
     parser.add_argument(
         "--preset",
@@ -57,20 +58,27 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
             "slower",
             "veryslow",
         ),
-        default="slow",
-        help="x264 preset (slower => better compression).",
+        default="veryslow",
+        help="x265 preset (slower => better compression).",
     )
     parser.add_argument(
         "--tune",
-        choices=("film", "animation", "grain", "stillimage", "psnr", "ssim"),
+        choices=("psnr", "ssim", "grain", "zerolatency", "fastdecode", "animation"),
         default=None,
-        help="x264 tune parameter (optional)",
+        help="x265 tune parameter (optional)",
     )
     parser.add_argument(
         "--profile",
-        choices=("baseline", "main", "high"),
-        default="high",
-        help="x264 profile to signal in the output (default: high)",
+        choices=("main", "main10"),
+        default="main",
+        help="x265 profile to signal in the output (default: main)",
+    )
+    parser.add_argument(
+        "--nvenc",
+        action="store_true",
+        default=False,
+        help="Use NVIDIA NVENC hardware encoder (hevc_nvenc) instead of libx265."
+        " Much faster; requires an NVIDIA GPU with NVENC support.",
     )
     parser = add_common_arguments(parser)
     if argcomplete:
@@ -104,6 +112,11 @@ def main():
         exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.exts}
         files = [p for p in files if p.suffix.lower() in exts]
 
+    # Config key overrides the CLI default (False), but explicit --nvenc always wins.
+    config = load_config(args.config)
+    if not args.nvenc:
+        args.nvenc = config.get("compress-use-nvenc", False)
+
     # Check ffmpeg availability
     if shutil.which("ffmpeg") is None:
         print("Error: ffmpeg not found in PATH")
@@ -128,6 +141,7 @@ def main():
             preset=args.preset,
             tune=args.tune,
             profile=args.profile,
+            use_nvenc=args.nvenc,
             apply=args.apply,
         )
 

@@ -106,7 +106,7 @@ def count_subtitle_streams(path: Path) -> int:
 
 
 def is_already_compressed(path: Path, profile: Optional[str] = None) -> bool:
-    """Return True if the first video stream is already H.264-encoded.
+    """Return True if the first video stream is already H.264 or H.265-encoded.
 
     Uses ffprobe to inspect the codec (and optionally the profile) of the
     first video stream.  Returns False on any error so the caller falls back
@@ -132,9 +132,10 @@ def is_already_compressed(path: Path, profile: Optional[str] = None) -> bool:
         if not output:
             return False
         parts = [p.strip() for p in output.split(",")]
-        if parts[0].lower() != "h264":
+        codec = parts[0].lower()
+        if codec not in ("h264", "hevc", "h265"):
             return False
-        if profile and len(parts) > 1:
+        if profile and codec == "h264" and len(parts) > 1:
             stream_profile = parts[1].lower().replace(" ", "")
             if profile.lower().replace(" ", "") not in stream_profile:
                 return False
@@ -152,11 +153,37 @@ def build_ffmpeg_cmd(
     preset: str,
     tune: Optional[str],
     profile: Optional[str],
+    use_nvenc: bool = False,
 ) -> List[str]:
     """Build an ffmpeg command that re-encodes video and copies audio/subtitles.
 
+    When *use_nvenc* is True the NVIDIA NVENC hardware encoder is used instead
+    of libx265.  The quality parameter mapping is:
+
+    * Encoder:  ``hevc_nvenc`` (NVENC H.265) instead of ``libx265``
+    * Quality:  ``-rc constqp -qp <crf>`` — NVENC has no CRF mode; QP is the
+      closest equivalent.  The same numeric value as the software CRF produces
+      slightly different (but comparable) quality.
+    * Preset:   NVENC uses ``p1``…``p7`` (p7 = best quality / slowest).
+      The software preset name is mapped automatically.
+    * Profile:  same ``-profile:v`` flag works for both encoders.
+    * Tune:     NVENC does not support the same tune names; ignored when NVENC
+      is active.
+
     The function returns a list suitable for ``subprocess.run``.
     """
+    _NVENC_PRESET_MAP = {
+        "ultrafast": "p1",
+        "superfast": "p2",
+        "veryfast": "p3",
+        "faster": "p4",
+        "fast": "p4",
+        "medium": "p5",
+        "slow": "p6",
+        "slower": "p6",
+        "veryslow": "p7",
+    }
+
     cmd: list[str] = [
         "ffmpeg",
         "-hide_banner",
@@ -172,11 +199,29 @@ def build_ffmpeg_cmd(
     if srtfile:
         cmd += ["-map", "1"]
 
-    video_args = ["-c:v", "libx264", "-crf", str(crf), "-preset", preset]
-    if tune:
-        video_args += ["-tune", tune]
-    if profile:
-        video_args += ["-profile:v", profile]
+    if use_nvenc:
+        nvenc_preset = _NVENC_PRESET_MAP.get(preset, "p7")
+        video_args = [
+            "-c:v",
+            "hevc_nvenc",
+            "-rc",
+            "constqp",
+            "-qp",
+            str(crf),
+            "-preset",
+            nvenc_preset,
+            "-surfaces",
+            "64",  # increase concurrent surfaces for throughput
+        ]
+        if profile:
+            video_args += ["-profile:v", profile]
+        # tune is not supported by hevc_nvenc — omitted intentionally
+    else:
+        video_args = ["-c:v", "libx265", "-crf", str(crf), "-preset", preset]
+        if tune:
+            video_args += ["-tune", tune]
+        if profile:
+            video_args += ["-profile:v", profile]
 
     cmd += video_args + ["-c:a", "copy", "-c:s", "copy"]
 
@@ -191,10 +236,11 @@ def build_ffmpeg_cmd(
 def compress_file(
     infile: Path,
     outfile: Path,
-    crf: int = 18,
-    preset: str = "slow",
+    crf: int = 20,
+    preset: str = "veryslow",
     tune: Optional[str] = None,
-    profile: Optional[str] = "high",
+    profile: Optional[str] = "main",
+    use_nvenc: bool = False,
     apply: bool = False,
 ) -> Tuple[List[str], Optional[subprocess.CompletedProcess]]:
     """Build (and optionally run) the ffmpeg command for a single file.
@@ -208,7 +254,15 @@ def compress_file(
     srtfile = find_external_srt(base)
     srt_lang = get_srt_lang(srtfile) if srtfile else None
     cmd = build_ffmpeg_cmd(
-        infile, outfile, srtfile, srt_lang, crf, preset, tune, profile
+        infile,
+        outfile,
+        srtfile,
+        srt_lang,
+        crf,
+        preset,
+        tune,
+        profile,
+        use_nvenc=use_nvenc,
     )
     if not apply:
         return cmd, None

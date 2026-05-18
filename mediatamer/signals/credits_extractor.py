@@ -26,6 +26,164 @@ _NAME_RE = re.compile(
     r"(\s[A-Za-z\u00C0-\u024F][A-Za-z\u00C0-\u024F'\-.]*)+$"
 )
 
+# Keywords that introduce a CAST section (names that follow are actors).
+# Bilingual: English and French (common on dubbed DVDs).
+_CAST_HEADERS: frozenset = frozenset(
+    [
+        "cast",
+        "avec",
+        "avec les voix de",
+        "starring",
+        "featuring",
+        "elenco",
+        "reparto",
+    ]
+)
+
+# Keywords that introduce a CREW section.
+_CREW_HEADERS: frozenset = frozenset(
+    [
+        "directed by",
+        "réalisé par",
+        "réalisateur",
+        "director",
+        "produced by",
+        "producteur",
+        "productenrs exeutifs",
+        "productenrs",
+        "executive producer",
+        "producteur exécutif",
+        "written by",
+        "écrit par",
+        "scénario",
+        "music by",
+        "musique",
+        "original music",
+        "edited by",
+        "montage",
+        "montage des effets visuels",
+        "director of photography",
+        "directeur de la photographie",
+        "cinematography",
+        "chef opérateur",
+        "costume design",
+        "costumes",
+        "supervision des costumes",
+        "make-up",
+        "maquillage",
+        "supervision maquillage",
+        "visual effects",
+        "effets visuels",
+        "stunt coordinator",
+        "cascadeurs",
+        "sound",
+        "son",
+        "mixage",
+        "casting",
+        "distribution",
+        "set decorator",
+        "décorateur",
+        "art director",
+        "chef décorateur",
+        "production designer",
+        "chef décorateur",
+        "script supervisor",
+        "scripte",
+        "assistant director",
+        "assistants realisation",
+        "assistants réalisation",
+        "production manager",
+        "directeur de production",
+        "régisseur",
+        "régissear",
+        "location manager",
+        "régisseur des extérieurs",
+        "régissear des extériears",
+        "electrician",
+        "chef electricien",
+        "électriciens",
+        "electriciens",
+        "gaffer",
+        "chef éclairagiste",
+        "props",
+        "accessoiriste",
+        "chef accessoiriste",
+        "wardrobe",
+        "habilleuse",
+        "habillage",
+        "construction",
+        "fabrication",
+        "composer",
+        "orchestre",
+        "dubbing",
+        "mixage doublage",
+        "mixage doublage original",
+        "post-production",
+        "postproduction",
+        "supervising producer",
+        "producteur superviseur",
+    ]
+)
+
+# Tokens that indicate a line is an organization/brand, never a person name.
+_ORG_TOKENS: frozenset = frozenset(
+    [
+        "bbc",
+        "inc",
+        "ltd",
+        "llc",
+        "gmbh",
+        "s.a.",
+        "s.l.",
+        "productions",
+        "entertainment",
+        "studios",
+        "studio",
+        "pictures",
+        "films",
+        "television",
+        "tv",
+        "foundation",
+        "fund",
+        "institute",
+        "graphics",
+        "fx",
+        "dolby",
+        "divx",
+        "imax",
+        "dts",
+    ]
+)
+
+
+def _line_is_org(line: str) -> bool:
+    """Return True if the line looks like an organization / brand, not a person."""
+    tokens = {w.lower().rstrip(".,") for w in line.split()}
+    return bool(tokens & _ORG_TOKENS)
+
+
+def _extract_name_suffix(line: str) -> Optional[str]:
+    """Try to extract a personal name from the *tail* of a credits line.
+
+    Credits lines often look like::
+
+        Chef Electricien Mark Keeling
+        Cascadeurs Belinda McGinley
+        DIRECTED BY Paul Wilmshurst
+
+    This function strips leading role/keyword tokens until the remainder
+    matches the name pattern, then returns the candidate name string.
+    Returns ``None`` if no name-like suffix is found.
+    """
+    words = line.split()
+    # Try progressively shorter suffixes (minimum 2 words for a name).
+    for start in range(len(words) - 1):
+        candidate = " ".join(words[start:])
+        if _NAME_RE.match(candidate) and not _line_is_org(candidate):
+            return candidate
+    return None
+
+
 # Session-level cache: avoids repeat network calls for the same name
 _NAME_LOOKUP_CACHE: Dict[str, Optional[str]] = {}
 
@@ -160,6 +318,8 @@ class VideoCreditsExtractor:
         self.fps = self.config.get("credits-scan-fps", 0.5)  # 1 frame every 2 seconds
         self.start_fraction = self.config.get("credits-start-fraction", 0.02)
         self.end_fraction = self.config.get("credits-end-fraction", 0.15)
+        # When True: skip the LLM and use the deterministic heuristic extractor.
+        self.use_heuristics = self.config.get("credits-use-heuristics", False)
         if (
             self.start_fraction + self.end_fraction >= 1.0
             or self.start_fraction < 0
@@ -249,9 +409,34 @@ class VideoCreditsExtractor:
                 f"[Credits Extractor] Using cached OCR data. Scanned duration: {result['ocr_cache'].get('scanned_duration', 0)}"
             )
 
-        print("[Credits Extractor] Refining cast profile with AI...")
-        cast_profile = self._refine_with_ai(result["ocr_cache"]["filtered_text"])
-        print("[Credits Extractor] Refining cast profile with AI... Done.")
+        if self.use_heuristics:
+            # Heuristics pre-filter → compact text → AI refining.
+            print("[Credits Extractor] Pre-filtering OCR text with heuristics...")
+            heuristic_result = self._extract_with_heuristics(
+                result["ocr_cache"]["filtered_text"]
+            )
+            compact_text = heuristic_result.get("_compact_text", "")
+            if compact_text.strip():
+                print(
+                    f"[Credits Extractor] Pre-filter produced"
+                    f" {compact_text.count(chr(10)) + 1} candidate line(s)."
+                    f" Refining with AI..."
+                )
+                cast_profile = self._refine_with_ai(compact_text)
+            else:
+                print(
+                    "[Credits Extractor] Heuristics found no candidates,"
+                    " falling back to full OCR text for AI..."
+                )
+                cast_profile = self._refine_with_ai(
+                    result["ocr_cache"]["filtered_text"]
+                )
+            print("[Credits Extractor] Refining with AI... Done.")
+        else:
+            # AI refining directly on the full filtered OCR text.
+            print("[Credits Extractor] Refining cast profile with AI...")
+            cast_profile = self._refine_with_ai(result["ocr_cache"]["filtered_text"])
+            print("[Credits Extractor] Refining cast profile with AI... Done.")
         # Validate and canonicalize names, with online lookup and session caching.
         print("[Credits Extractor] Validating and canonicalizing names...")
         for attr in ("real_actors", "crew_names", "fictional_characters"):
@@ -271,13 +456,15 @@ class VideoCreditsExtractor:
             for i, (start, dur) in enumerate(ranges):
                 # Filter chain explanation:
                 # - fps: sample at low rate
-                # - scale: ensure enough resolution for OCR but not too huge
+                # - scale to 1920px wide: sharper glyphs at higher resolution
                 # - format=gray: grayscale for OCR
-                # - lutyuv: thresholding to make text pop (assume white on dark)
-                # - negate: convert to black on white for better Tesseract performance
+                # - unsharp: sharpen before thresholding so thin strokes survive
+                # - lutyuv: hard binary threshold (white-on-dark credits → invert)
+                # - negate: flip to black-on-white for Tesseract
                 filter_chain = (
-                    f"fps={self.fps},scale=1280:-1,format=gray,"
-                    f"lutyuv=y='if(gt(val,128),255,0)',negate"
+                    f"fps={self.fps},scale=1920:-1,format=gray,"
+                    f"unsharp=5:5:1.5:5:5:0.0,"
+                    f"lutyuv=y='if(gt(val,140),255,0)',negate"
                 )
 
                 out_pattern = os.path.join(tmpdir, f"range_{i}_%04d.png")
@@ -321,7 +508,17 @@ class VideoCreditsExtractor:
             for img_name in images:
                 try:
                     img_path = os.path.join(tmpdir, img_name)
-                    text = pytesseract.image_to_string(Image.open(img_path))
+                    # PSM 3 = fully automatic page segmentation (default): Tesseract
+                    # detects multiple isolated text regions on the page, which is
+                    # correct for credits frames where names are scattered on a dark
+                    # background.  PSM 6 (single block) and PSM 11 (sparse words) both
+                    # perform worse here — PSM 6 misses most isolated names, PSM 11
+                    # fragments them into single words.
+                    # OEM 1 = LSTM neural-net engine only (more accurate than legacy).
+                    tess_config = "--oem 1 --psm 3"
+                    text = pytesseract.image_to_string(
+                        Image.open(img_path), config=tess_config
+                    )
                     if text.strip():
                         all_text.append(text.strip())
                 except Exception as e:
@@ -405,6 +602,118 @@ class VideoCreditsExtractor:
             if not merged:
                 kept.append(name)
         return kept
+
+    def _extract_with_heuristics(self, filtered_text: str) -> dict:
+        """Deterministic name extractor — no LLM required.
+
+        Always called as a pre-filter before the LLM.  When
+        ``use_heuristics=True`` the result is used directly; otherwise the
+        compact text it produces is fed to the LLM instead of the full noisy
+        OCR dump.
+
+        Returns the same keys as ``_refine_with_ai`` plus ``_compact_text``:
+        a short structured representation of the candidates
+        (e.g. ``"[CREW] Chef Electricien: Mark Keeling"``) ready to pass to
+        the LLM.
+        """
+        # (category, role_hint, name)
+        entries: List[Tuple[str, str, str]] = []
+        category: str = "crew"  # default: treat unknown-context names as crew
+        current_role_hint: str = ""
+
+        for raw_line in filtered_text.splitlines():
+            line = raw_line.strip()
+            if not line or len(line) < 4:
+                continue
+
+            line = re.sub(r"\s+", " ", line).rstrip(".,;:-")
+
+            alpha = sum(c.isalpha() for c in line)
+            if alpha < len(line) * 0.5 or alpha < 3:
+                continue
+
+            if _line_is_org(line):
+                continue
+
+            line_lower = line.lower()
+
+            # --- Role-header detection (longest match first) ---
+            matched_kw: str = ""
+            for kw in sorted(_CAST_HEADERS | _CREW_HEADERS, key=len, reverse=True):
+                if line_lower.startswith(kw):
+                    matched_kw = kw
+                    category = "actor" if kw in _CAST_HEADERS else "crew"
+                    current_role_hint = kw.title()
+                    break
+
+            # --- Name extraction ---
+            # Try whole line first (bare name: "PAUL WILMSHURST").
+            candidate: Optional[str] = None
+            role_hint = current_role_hint
+
+            normalized = line.title() if line.isupper() else line
+            if _NAME_RE.match(normalized) and not _line_is_org(normalized):
+                candidate = normalized
+                role_hint = ""  # bare name — no role prefix
+            else:
+                raw_candidate = _extract_name_suffix(line)
+                if raw_candidate:
+                    candidate = (
+                        raw_candidate.title()
+                        if raw_candidate.isupper()
+                        else raw_candidate
+                    )
+                    # Role hint = everything before the name on this line.
+                    prefix = line[: line.rfind(raw_candidate)].strip().rstrip(":-")
+                    if prefix:
+                        role_hint = prefix.title()
+                        # Also update the running category from this line's prefix.
+                        prefix_lower = prefix.lower()
+                        for kw in sorted(
+                            _CAST_HEADERS | _CREW_HEADERS, key=len, reverse=True
+                        ):
+                            if prefix_lower.startswith(kw):
+                                category = "actor" if kw in _CAST_HEADERS else "crew"
+                                current_role_hint = prefix.title()
+                                break
+
+            if not candidate:
+                continue
+
+            entries.append((category, role_hint, candidate))
+
+        # Deduplicate by name (case-insensitive), preserve first occurrence.
+        seen: set = set()
+        deduped: List[Tuple[str, str, str]] = []
+        for cat, hint, name in entries:
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                deduped.append((cat, hint, name))
+
+        actors = [n for c, _, n in deduped if c == "actor"]
+        crew = [n for c, _, n in deduped if c != "actor"]
+
+        # Build compact text for the LLM pre-filter.
+        compact_lines: List[str] = []
+        for cat, hint, name in deduped:
+            tag = "CAST" if cat == "actor" else "CREW"
+            if hint:
+                compact_lines.append(f"[{tag}] {hint}: {name}")
+            else:
+                compact_lines.append(f"[{tag}] {name}")
+        compact_text = "\n".join(compact_lines)
+
+        print(
+            f"[Credits Extractor] Heuristics: {len(actors)} actor(s),"
+            f" {len(crew)} crew candidate(s) before TMDB validation."
+        )
+        return {
+            "real_actors": actors,
+            "crew_names": crew,
+            "fictional_characters": [],
+            "_compact_text": compact_text,
+        }
 
     def _refine_with_ai(self, raw_text: str) -> dict:
         """
