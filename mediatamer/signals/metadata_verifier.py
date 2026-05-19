@@ -24,6 +24,13 @@ class MetadataVerifier:
         """
         Validate the existence of an episode and retrieve the TVDB-formatted name.
         """
+        if not isinstance(season, int) or not isinstance(episode, int):
+            print(
+                f"MetadataVerifier: Cannot verify '{show_name}' — "
+                f"season={season!r} or episode={episode!r} is not an integer."
+            )
+            return None
+
         # 1. Quick validation via TMDB
         search_resp = requests.get(
             f"{self.tmdb_base}/search/tv",
@@ -44,7 +51,8 @@ class MetadataVerifier:
 
         if ep_resp.status_code != 200:
             print(
-                f"MetadataVerifier: No TMDB episode found for '{show_name}' S{season:02d}E{episode:02d}"
+                f"MetadataVerifier: No TMDB episode found for '{show_name}'"
+                f" S{season:02d}E{episode:02d}"
             )
             return None
 
@@ -52,7 +60,8 @@ class MetadataVerifier:
         output = self.get_tvdb_metadata(show_name, season, episode)
         if not output or "seriesId" not in output:
             print(
-                f"MetadataVerifier: No TVDB metadata found for '{show_name}' S{season:02d}E{episode:02d}"
+                f"MetadataVerifier: No TVDB metadata found for '{show_name}'"
+                f" S{season:02d}E{episode:02d}"
             )
             return None
 

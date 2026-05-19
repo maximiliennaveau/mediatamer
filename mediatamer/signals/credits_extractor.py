@@ -37,6 +37,9 @@ _CAST_HEADERS: frozenset = frozenset(
         "featuring",
         "elenco",
         "reparto",
+        "distribution des roles",
+        "distribution des rôles",
+        "with",
     ]
 )
 
@@ -188,8 +191,10 @@ def _extract_name_suffix(line: str) -> Optional[str]:
 _NAME_LOOKUP_CACHE: Dict[str, Optional[str]] = {}
 
 
-def _lookup_name_online(name: str, tmdb_api_key: str) -> Optional[str]:
-    """Verify *name* against TMDB (preferred) or Wikipedia (fallback).
+def _lookup_name_online(
+    name: str, tmdb_api_key: str, tvdb_api_key: Optional[str] = None
+) -> Optional[str]:
+    """Verify *name* against TMDB, then TVDB, then Wikipedia.
 
     Returns the canonical name string on success, None if the name cannot
     be confirmed as a real person.
@@ -198,11 +203,31 @@ def _lookup_name_online(name: str, tmdb_api_key: str) -> Optional[str]:
         return _NAME_LOOKUP_CACHE[name]
 
     result = _lookup_via_tmdb(name, tmdb_api_key)
+    if result is None and tvdb_api_key:
+        result = _lookup_via_tvdb(name, tvdb_api_key)
     if result is None:
         result = _lookup_via_wikipedia(name)
 
     _NAME_LOOKUP_CACHE[name] = result
     return result
+
+
+def _lookup_via_tvdb(name: str, api_key: str) -> Optional[str]:
+    """Look up a person name on TVDB using its /search?type=person endpoint.
+
+    Returns the canonical name on a confident match (≥ 0.75 similarity),
+    or None.
+    """
+    from mediatamer.signals.tvdb import search_person_tvdb
+
+    hit = search_person_tvdb(name, api_key)
+    if not hit:
+        return None
+    _, canonical = hit
+    ratio = difflib.SequenceMatcher(None, name.lower(), canonical.lower()).ratio()
+    if ratio < 0.75:
+        return None
+    return canonical
 
 
 def _tmdb_search_person(query: str, api_key: str) -> List[dict]:
@@ -238,20 +263,29 @@ def _lookup_via_tmdb(name: str, api_key: str) -> Optional[str]:
     for result in _tmdb_search_person(name, api_key):
         candidates.setdefault(result["id"], result)
 
+    found_via_token_fallback = False
     if not candidates:
         # Fallback: search each word individually, aggregate results.
+        # We track this because token-fallback matches require a stricter
+        # similarity threshold (the query is weaker evidence).
         tokens = name.split()
         for token in tokens:
             if len(token) < 3:
                 continue
             for result in _tmdb_search_person(token, api_key):
                 candidates.setdefault(result["id"], result)
+        if candidates:
+            found_via_token_fallback = True
 
     if not candidates:
-        print(f"TMDB lookup error for {name!r}")
+        # print(f"TMDB lookup error for {name!r}")
         return None
 
     # Pick the candidate whose name is closest to the OCR-extracted string.
+    # The similarity is ALWAYS measured against the full original *name*,
+    # even when the candidate was surfaced via a single-token fallback query.
+    # This prevents token queries like 'Andrew' (from 'Andrew Gaine') from
+    # accepting 'Andrew Garfield' just because 'Andrew' matches well.
     best_ratio = 0.0
     best_name = ""
     name_lower = name.lower()
@@ -264,11 +298,14 @@ def _lookup_via_tmdb(name: str, api_key: str) -> Optional[str]:
             best_ratio = ratio
             best_name = candidate_name
 
-    if best_ratio < 0.70:
-        print(
-            f"TMDB lookup for {name!r} returned {best_name!r} "
-            f"with low similarity ({best_ratio:.2f}), rejecting."
-        )
+    # Require a higher threshold when evidence came only from a token search,
+    # since the match is inherently less reliable.
+    threshold = 0.85 if found_via_token_fallback else 0.75
+    if best_ratio < threshold:
+        # print(
+        #     f"TMDB lookup for {name!r} returned {best_name!r} "
+        #     f"with low similarity ({best_ratio:.2f}, threshold {threshold:.2f}), rejecting."
+        # )
         return None
     return best_name
 
@@ -318,8 +355,6 @@ class VideoCreditsExtractor:
         self.fps = self.config.get("credits-scan-fps", 0.5)  # 1 frame every 2 seconds
         self.start_fraction = self.config.get("credits-start-fraction", 0.02)
         self.end_fraction = self.config.get("credits-end-fraction", 0.15)
-        # When True: skip the LLM and use the deterministic heuristic extractor.
-        self.use_heuristics = self.config.get("credits-use-heuristics", False)
         if (
             self.start_fraction + self.end_fraction >= 1.0
             or self.start_fraction < 0
@@ -409,38 +444,42 @@ class VideoCreditsExtractor:
                 f"[Credits Extractor] Using cached OCR data. Scanned duration: {result['ocr_cache'].get('scanned_duration', 0)}"
             )
 
-        if self.use_heuristics:
-            # Heuristics pre-filter → compact text → AI refining.
-            print("[Credits Extractor] Pre-filtering OCR text with heuristics...")
-            heuristic_result = self._extract_with_heuristics(
-                result["ocr_cache"]["filtered_text"]
-            )
-            compact_text = heuristic_result.get("_compact_text", "")
-            if compact_text.strip():
-                print(
-                    f"[Credits Extractor] Pre-filter produced"
-                    f" {compact_text.count(chr(10)) + 1} candidate line(s)."
-                    f" Refining with AI..."
-                )
-                cast_profile = self._refine_with_ai(compact_text)
-            else:
-                print(
-                    "[Credits Extractor] Heuristics found no candidates,"
-                    " falling back to full OCR text for AI..."
-                )
-                cast_profile = self._refine_with_ai(
-                    result["ocr_cache"]["filtered_text"]
-                )
-            print("[Credits Extractor] Refining with AI... Done.")
-        else:
-            # AI refining directly on the full filtered OCR text.
-            print("[Credits Extractor] Refining cast profile with AI...")
-            cast_profile = self._refine_with_ai(result["ocr_cache"]["filtered_text"])
-            print("[Credits Extractor] Refining cast profile with AI... Done.")
+        filtered_text = result["ocr_cache"]["filtered_text"]
+
+        # Step A: heuristic extraction (always runs — fast, no API calls).
+        print("[Credits Extractor] Extracting names with heuristics...")
+        heuristic_result = self._extract_with_heuristics(filtered_text)
+        heur_names: List[str] = heuristic_result.get("credits_names", [])
+        compact_text = heuristic_result.get("_compact_text", "")
+        print(f"[Credits Extractor] Heuristics found {len(heur_names)} candidate(s).")
+
+        # Step B: AI refinement — feed compact heuristic text when available,
+        # otherwise fall back to the full filtered OCR text.
+        print("[Credits Extractor] Refining with AI...")
+        ai_input = compact_text.strip() if compact_text.strip() else filtered_text
+        cast_profile = self._refine_with_ai(ai_input)
+        ai_names: List[str] = cast_profile.get("credits_names", [])
+        print(f"[Credits Extractor] AI found {len(ai_names)} candidate(s).")
+
+        # Step C: union — merge both lists, preserving order (heuristics first),
+        # deduplicating case-insensitively so neither source loses unique finds.
+        seen: set = set()
+        merged: List[str] = []
+        for name in heur_names + ai_names:
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                merged.append(name)
+        print(
+            f"[Credits Extractor] Union: {len(heur_names)} heuristic"
+            f" + {len(ai_names)} AI → {len(merged)} unique candidate(s)."
+        )
+
         # Validate and canonicalize names, with online lookup and session caching.
         print("[Credits Extractor] Validating and canonicalizing names...")
-        for attr in ("real_actors", "crew_names", "fictional_characters"):
-            result[attr] = self._validate_names(cast_profile.get(attr, []))
+        result["credits_names"] = self._validate_names(merged)
+        # Fictional characters are story names — not validated against TMDB.
+        result["fictional_characters"] = cast_profile.get("fictional_characters", [])
         print("[Credits Extractor] Validating and canonicalizing names... Done.")
         return result
 
@@ -569,6 +608,7 @@ class VideoCreditsExtractor:
         2. Wikipedia opensearch (last resort).
         """
         tmdb_api_key = self.config.get("tmdb-api-key")
+        tvdb_api_key = self.config.get("tvdb-api-key")
 
         canonical: List[str] = []
         for name in names:
@@ -576,13 +616,14 @@ class VideoCreditsExtractor:
             if not self._is_valid_name(stripped):
                 continue
 
-            resolved = _lookup_name_online(stripped, tmdb_api_key)
+            resolved = _lookup_name_online(stripped, tmdb_api_key, tvdb_api_key)
 
             if resolved is None:
-                print(f"[Credits Extractor] Discarding unverified: {stripped!r}")
+                # print(f"[Credits Extractor] Discarding unverified: {stripped!r}")
                 continue
             if stripped.lower() != resolved.lower():
-                print(f"[Credits Extractor] Corrected: {stripped!r} → {resolved!r}")
+                # print(f"[Credits Extractor] Corrected: {stripped!r} → {resolved!r}")
+                pass
             canonical.append(resolved)
 
         kept: List[str] = []
@@ -606,55 +647,30 @@ class VideoCreditsExtractor:
     def _extract_with_heuristics(self, filtered_text: str) -> dict:
         """Deterministic name extractor — no LLM required.
 
-        Always called as a pre-filter before the LLM.  When
-        ``use_heuristics=True`` the result is used directly; otherwise the
-        compact text it produces is fed to the LLM instead of the full noisy
-        OCR dump.
-
-        Returns the same keys as ``_refine_with_ai`` plus ``_compact_text``:
-        a short structured representation of the candidates
-        (e.g. ``"[CREW] Chef Electricien: Mark Keeling"``) ready to pass to
-        the LLM.
+        Extracts all real person name candidates from OCR text into a flat
+        ``credits_names`` list without any actor/crew classification.
+        Also returns ``_compact_text`` for LLM pre-filtering.
         """
-        # (category, role_hint, name)
-        entries: List[Tuple[str, str, str]] = []
-        category: str = "crew"  # default: treat unknown-context names as crew
-        current_role_hint: str = ""
-
+        # Pre-process: normalise lines and drop obvious noise.
+        clean_lines: List[str] = []
         for raw_line in filtered_text.splitlines():
             line = raw_line.strip()
             if not line or len(line) < 4:
                 continue
-
             line = re.sub(r"\s+", " ", line).rstrip(".,;:-")
-
             alpha = sum(c.isalpha() for c in line)
             if alpha < len(line) * 0.5 or alpha < 3:
                 continue
-
             if _line_is_org(line):
                 continue
+            clean_lines.append(line)
 
-            line_lower = line.lower()
-
-            # --- Role-header detection (longest match first) ---
-            matched_kw: str = ""
-            for kw in sorted(_CAST_HEADERS | _CREW_HEADERS, key=len, reverse=True):
-                if line_lower.startswith(kw):
-                    matched_kw = kw
-                    category = "actor" if kw in _CAST_HEADERS else "crew"
-                    current_role_hint = kw.title()
-                    break
-
-            # --- Name extraction ---
-            # Try whole line first (bare name: "PAUL WILMSHURST").
-            candidate: Optional[str] = None
-            role_hint = current_role_hint
-
+        # (role_hint, name) pairs
+        entries: List[Tuple[str, str]] = []
+        for line in clean_lines:
             normalized = line.title() if line.isupper() else line
             if _NAME_RE.match(normalized) and not _line_is_org(normalized):
-                candidate = normalized
-                role_hint = ""  # bare name — no role prefix
+                entries.append(("", normalized))
             else:
                 raw_candidate = _extract_name_suffix(line)
                 if raw_candidate:
@@ -663,54 +679,26 @@ class VideoCreditsExtractor:
                         if raw_candidate.isupper()
                         else raw_candidate
                     )
-                    # Role hint = everything before the name on this line.
                     prefix = line[: line.rfind(raw_candidate)].strip().rstrip(":-")
-                    if prefix:
-                        role_hint = prefix.title()
-                        # Also update the running category from this line's prefix.
-                        prefix_lower = prefix.lower()
-                        for kw in sorted(
-                            _CAST_HEADERS | _CREW_HEADERS, key=len, reverse=True
-                        ):
-                            if prefix_lower.startswith(kw):
-                                category = "actor" if kw in _CAST_HEADERS else "crew"
-                                current_role_hint = prefix.title()
-                                break
-
-            if not candidate:
-                continue
-
-            entries.append((category, role_hint, candidate))
+                    entries.append((prefix.title() if prefix else "", candidate))
 
         # Deduplicate by name (case-insensitive), preserve first occurrence.
         seen: set = set()
-        deduped: List[Tuple[str, str, str]] = []
-        for cat, hint, name in entries:
+        names: List[str] = []
+        compact_lines: List[str] = []
+        for hint, name in entries:
             key = name.lower()
             if key not in seen:
                 seen.add(key)
-                deduped.append((cat, hint, name))
+                names.append(name)
+                compact_lines.append(f"{hint}: {name}" if hint else name)
 
-        actors = [n for c, _, n in deduped if c == "actor"]
-        crew = [n for c, _, n in deduped if c != "actor"]
-
-        # Build compact text for the LLM pre-filter.
-        compact_lines: List[str] = []
-        for cat, hint, name in deduped:
-            tag = "CAST" if cat == "actor" else "CREW"
-            if hint:
-                compact_lines.append(f"[{tag}] {hint}: {name}")
-            else:
-                compact_lines.append(f"[{tag}] {name}")
         compact_text = "\n".join(compact_lines)
-
         print(
-            f"[Credits Extractor] Heuristics: {len(actors)} actor(s),"
-            f" {len(crew)} crew candidate(s) before TMDB validation."
+            f"[Credits Extractor] Heuristics: {len(names)} candidate(s) before TMDB validation."
         )
         return {
-            "real_actors": actors,
-            "crew_names": crew,
+            "credits_names": names,
             "fictional_characters": [],
             "_compact_text": compact_text,
         }

@@ -17,6 +17,23 @@ from mediatamer.signals.tvdb import (
 BASE_URL = "https://api.themoviedb.org/3"
 
 
+# =============================================================================
+# DEPRECATED — TMDB PIPELINE
+#
+# The TMDB-based show/episode ranking pipeline is no longer used by
+# search_ovdb().  It is kept here for reference and for standalone scripts
+# (tmp/compare_tmdb_vs_tvdb.py, tests/sandbox/).
+#
+# Reasons for deprecation:
+#  - TMDB does not reliably include the air date in the show name, which can
+#    cause false matches between remakes sharing the same title.
+#  - TMDB season-level cast is shared across all episodes of a season, so two-
+#    parters end up with identical scores and no winner can be determined.
+#  - TVDB stores episodeId on per-character records, giving true per-episode
+#    guest-cast discrimination without any of the above issues.
+# =============================================================================
+
+
 class MetadataMatcher:
     def __init__(self, tmdb_api_key: str):
         self.api_key = tmdb_api_key
@@ -451,6 +468,7 @@ class MetadataMatcher:
         self,
         episodes: List[Dict[str, Any]],
         show_people: List[Dict[str, Any]],
+        season_hint: int | None = None,
     ) -> List[Dict[str, Any]]:
         """Cross-reference episode metadata against a resolved people list.
 
@@ -523,10 +541,35 @@ class MetadataMatcher:
                             "job": c.get("job", ""),
                         }
 
+            # compute a weighted score that favours guest/main cast matches
+            # over crew matches so episodes with relevant cast are preferred
+            guest_main_weight = 3
+            crew_weight = 1
+            weighted = 0
+            for v in matched.values():
+                if v.get("credit_type") in ("guest", "main"):
+                    weighted += guest_main_weight
+                else:
+                    weighted += crew_weight
+
+            # Apply a season-hint bonus: when a season hint is given, episodes
+            # from the hinted season get a bonus so that season-0 specials
+            # (which often have more complete per-episode TMDB data) are not
+            # preferred over regular-season episodes with the same cast score.
+            # The bonus is applied only when there is at least one match;
+            # zero-match episodes stay at zero regardless.
+            season_bonus = 0
+            if season_hint is not None and len(matched) > 0:
+                ep_season = ep.get("season")
+                if ep_season == season_hint:
+                    # Bonus equal to one extra guest-match to tip ties
+                    season_bonus = guest_main_weight
+
             ranked.append(
                 {
                     **ep,
                     "match_count": len(matched),
+                    "weighted_match_count": weighted + season_bonus,
                     "matched_people": sorted(
                         matched.values(),
                         key=lambda x: x["credit_type"],  # guest before crew
@@ -534,7 +577,11 @@ class MetadataMatcher:
                 }
             )
 
-        ranked.sort(key=lambda x: x["match_count"], reverse=True)
+        # sort by weighted match count first, then by raw match count
+        ranked.sort(
+            key=lambda x: (x.get("weighted_match_count", 0), x["match_count"]),
+            reverse=True,
+        )
         return ranked
 
     def resolve_person_candidates(
@@ -932,14 +979,32 @@ class MetadataMatcher:
         }
 
 
+# === DEPRECATED helper (used by MetadataMatcher above) ===
 def _fuzzy_show_match(name1: str, name2: str) -> float:
     """Case-insensitive fuzzy ratio between two show names."""
     return SequenceMatcher(None, name1.upper().strip(), name2.upper().strip()).ratio()
 
 
+# =============================================================================
+# END DEPRECATED — TMDB PIPELINE
+# =============================================================================
+
+
 def search_ovdb(metadata: VideoMetadata, config: dict) -> bool:
-    matcher = MetadataMatcher(config.get("tmdb-api-key"))
-    people = metadata.cast_profile["real_actors"] + metadata.cast_profile["crew_names"]
+    """Identify the TV episode for *metadata* using the TVDB pipeline.
+
+    Uses TVDB exclusively:
+      - Show identification via co-appearing people (crossreference_people_tvdb)
+      - Episode ranking via per-episode character records with episodeId
+        (rank_episodes_by_tvdb_people / get_tvdb_episode_info)
+
+    TVDB show names include the air year (e.g. "Doctor Who (2005)"), preventing
+    false matches between remakes sharing the same title.
+    """
+    people = metadata.cast_profile.get("credits_names") or (
+        metadata.cast_profile.get("real_actors", [])
+        + metadata.cast_profile.get("crew_names", [])
+    )
     print(f"search_ovdb: People extracted: {people}")
 
     if not people:
@@ -947,122 +1012,41 @@ def search_ovdb(metadata: VideoMetadata, config: dict) -> bool:
         metadata.ovdb = {"shows": [], "ranked_episodes": [], "best_episode": None}
         return False
 
-    # Step 1a: TMDB cross-reference
-    shows = matcher.crossreference_people(people)
-
-    # Step 1b: TVDB parallel track — explicit TV/movie split, no heuristics needed
     tvdb_api_key = config.get("tvdb-api-key")
-    tvdb_shows = (
-        crossreference_people_tvdb(people, tvdb_api_key) if tvdb_api_key else []
-    )
-
-    if tvdb_shows:
-        best_tvdb = tvdb_shows[0]
-        print(
-            f"search_ovdb: TVDB track best show: {best_tvdb['show_name']}"
-            f" — {best_tvdb['match_count']} people matched"
-        )
-        for p in best_tvdb["people"][:5]:
-            print(
-                f"search_ovdb: TVDB  '{p['ocr_name']}' → {p['person_name']}"
-                f" ({p['people_type']}, char='{p['character']}')"
-            )
-    else:
-        best_tvdb = None
-        print("search_ovdb: TVDB track found no matches.")
-
-    # Merge: pick the show with the most votes, using the other track to confirm.
-    # If both tracks agree (same show name, fuzzy ≥ 0.8) boost confidence.
-    # If TVDB has strictly more matches, prefer it (TVDB's TV/movie split is cleaner).
-    if not shows and not best_tvdb:
-        print("search_ovdb: No matching show found on either track.")
+    if not tvdb_api_key:
+        print("search_ovdb: No TVDB API key configured, skipping.")
         metadata.ovdb = {"shows": [], "ranked_episodes": [], "best_episode": None}
         return False
 
-    if shows:
-        best_show = shows[0]
-        tmdb_count = best_show["match_count"]
-    else:
-        best_show = None
-        tmdb_count = 0
+    # Step 1: TVDB cross-reference — find which TV show these people co-appear in.
+    # TVDB names include the air year which prevents title-clash false positives.
+    tvdb_shows = crossreference_people_tvdb(people, tvdb_api_key)
 
-    tvdb_count = best_tvdb["match_count"] if best_tvdb else 0
+    if not tvdb_shows:
+        print("search_ovdb: TVDB found no matching show.")
+        metadata.ovdb = {"shows": [], "ranked_episodes": [], "best_episode": None}
+        return False
 
-    if best_show and best_tvdb:
-        agreement = _fuzzy_show_match(best_show["show_name"], best_tvdb["show_name"])
-        print(
-            f"search_ovdb: Track agreement: TMDB='{best_show['show_name']}' ({tmdb_count} votes)"
-            f" vs TVDB='{best_tvdb['show_name']}' ({tvdb_count} votes)"
-            f" — name similarity {agreement:.2f}"
-        )
-        if agreement >= 0.8:
-            print("search_ovdb: Both tracks agree — high confidence.")
-        elif tvdb_count > tmdb_count:
-            # TVDB found more co-appearing people; trust it for show name lookup.
-            # Update show_id/show_name to the TVDB show name so get_show_episodes()
-            # resolves the correct TMDB entry via its name-search path.
-            # Crucially: keep best_show["people"] unchanged — those entries carry
-            # TMDB person IDs which rank_episodes_by_cast needs to match against
-            # TMDB episode cast data.  Replacing them with TVDB person IDs breaks
-            # episode ranking (the two ID spaces are unrelated).
-            print(
-                f"search_ovdb: TVDB track has more matches ({tvdb_count} > {tmdb_count})"
-                f" — preferring TVDB show name '{best_tvdb['show_name']}' for lookup."
-            )
-            best_show["show_id"] = best_tvdb[
-                "show_name"
-            ]  # string → resolved by get_show_episodes
-            best_show["show_name"] = best_tvdb["show_name"]
-            best_show["match_count"] = tvdb_count
-            # best_show["people"] intentionally unchanged (TMDB IDs for episode ranking)
-        else:
-            print(
-                "search_ovdb: Tracks disagree — keeping TMDB result (more matches or equal)."
-            )
-    elif not best_show:
-        # Only TVDB found something
-        print(
-            f"search_ovdb: Only TVDB track matched — using '{best_tvdb['show_name']}'."
-        )
-        best_show = {
-            "show_id": best_tvdb["show_name"],
-            "show_name": best_tvdb["show_name"],
-            "first_air_date": "",
-            "match_count": tvdb_count,
-            "people": [
-                {
-                    "ocr_name": p["ocr_name"],
-                    "person_id": p["person_id"],
-                    "person_name": p["person_name"],
-                    "episode_count": 0,
-                    "credit_type": "cast",
-                    "character": p["character"],
-                    "job": "",
-                }
-                for p in best_tvdb["people"]
-            ],
-        }
+    best_tvdb = tvdb_shows[0]
+    show_name = best_tvdb["show_name"]
+    show_id = best_tvdb["show_id"]
 
-    year = best_show["first_air_date"][:4] if best_show.get("first_air_date") else "?"
     print(
-        f"search_ovdb: Best show: {best_show['show_name']} ({year})"
-        f" id:{best_show['show_id']} — {best_show['match_count']} people matched"
+        f"search_ovdb: Best show: {show_name}"
+        f" id:{show_id} — {best_tvdb['match_count']} people matched"
     )
-    for p in best_show["people"]:
+    for p in best_tvdb["people"][:5]:
         print(
             f"search_ovdb:   '{p['ocr_name']}' → {p['person_name']}"
-            f" ({p.get('credit_type', p.get('people_type', ''))},"
-            f" {p.get('episode_count', p.get('character', ''))})"
+            f" ({p['people_type']}, char='{p['character']}')"
         )
 
-    # Step 2+3: rank episodes by co-appearing people.
-    # Try TVDB first: it stores episodeId on each character record, giving a
-    # direct per-episode cast lookup that is often more complete than TMDB.
-    # Fall back to TMDB if TVDB returns no useful results.
+    # Step 2: TVDB episode ranking — episodeId on character records gives true
+    # per-episode discrimination (guest cast, directors, etc.).
     ranked: list = []
-    if best_tvdb and isinstance(best_tvdb.get("show_id"), int) and tvdb_api_key:
+    if isinstance(show_id, int):
         tvdb_ep_ranked = rank_episodes_by_tvdb_people(
-            best_tvdb["show_id"], best_tvdb["people"], tvdb_api_key
+            show_id, best_tvdb["people"], tvdb_api_key
         )
         tvdb_has_strict_winner = (
             tvdb_ep_ranked
@@ -1073,63 +1057,82 @@ def search_ovdb(metadata: VideoMetadata, config: dict) -> bool:
             )
         )
         if tvdb_has_strict_winner:
-            # Enrich every ranked entry with episode metadata (season/ep/title).
             for r in tvdb_ep_ranked:
                 info = get_tvdb_episode_info(r["episode_id"], tvdb_api_key)
-                r["show_name"] = best_show["show_name"]
-                r["show_id"] = best_tvdb["show_id"]
+                r["show_name"] = show_name
+                r["show_id"] = show_id
                 r["season"] = info["season"] if info else None
                 r["episode"] = info["episode"] if info else None
                 r["title"] = info["title"] if info else ""
                 r["air_date"] = info["air_date"] if info else ""
             ranked = tvdb_ep_ranked
             print(
-                f"search_ovdb: TVDB episode ranking used"
+                f"search_ovdb: TVDB episode ranking — strict winner"
                 f" ({tvdb_ep_ranked[0]['match_count']} people in top episode)."
             )
         elif tvdb_ep_ranked:
-            top = tvdb_ep_ranked[0]["match_count"]
-            n_tied = sum(1 for ep in tvdb_ep_ranked if ep["match_count"] == top)
+            top_score = tvdb_ep_ranked[0]["match_count"]
+            tied = [ep for ep in tvdb_ep_ranked if ep["match_count"] == top_score]
             print(
                 f"search_ovdb: TVDB episode ranking inconclusive"
-                f" ({top} people, {n_tied} episodes tied) — falling back to TMDB."
+                f" ({top_score} people, {len(tied)} episodes tied)"
+                f" — enriching tied episodes for summary disambiguation."
             )
+            for r in tied:
+                info = get_tvdb_episode_info(r["episode_id"], tvdb_api_key)
+                r["show_name"] = show_name
+                r["show_id"] = show_id
+                r["season"] = info["season"] if info else None
+                r["episode"] = info["episode"] if info else None
+                r["title"] = info["title"] if info else ""
+                r["air_date"] = info["air_date"] if info else ""
+                r["overview"] = info.get("overview", "") if info else ""
+                r["tvdb_tied"] = True
+            ranked = tied
 
-    if not ranked:
-        # Fall back to TMDB: fetch all episodes and match TMDB person IDs.
-        season_hint = matcher.get_season_from_path(metadata.path)
-        episodes = matcher.get_show_episodes(
-            best_show["show_id"], season_hint=season_hint
-        )
-        ranked = matcher.rank_episodes_by_cast(episodes, best_show["people"])
+    # Step 3: select the best episode (strict highest score, score > 0).
+    best_episode = {}
+    if ranked:
+        best_score = ranked[0].get("match_count", 0)
+        if best_score > 0 and all(
+            best_score > ep.get("match_count", 0) for ep in ranked[1:]
+        ):
+            best_episode = ranked[0]
 
-    # Check if the best episode has strictly the highest number of matched OCR names
-    # and that this number is > 0
-    best_episode = (
-        ranked[0]
-        if ranked
-        and ranked[0]["match_count"] > 0
-        and all(ranked[0]["match_count"] > ep["match_count"] for ep in ranked[1:])
-        else {}
-    )
-
-    if best_episode and best_episode["match_count"] > 0:
+    if best_episode and best_episode.get("match_count", 0) > 0:
         print("search_ovdb: --- MATCH FOUND ---")
-        print(f"search_ovdb: Show   : {best_episode['show_name']} ({year})")
+        print(f"search_ovdb: Show   : {best_episode['show_name']}")
         print(
             f"search_ovdb: Episode: S{best_episode['season']:02d}E{best_episode['episode']:02d}"
             f" - {best_episode['title']}"
         )
         hits = ", ".join(
             f"{p['person_name']}({p['credit_type']})"
-            for p in best_episode["matched_people"]
+            for p in best_episode.get("matched_people", [])
         )
         print(f"search_ovdb: People : {best_episode['match_count']} matched — {hits}")
     else:
-        print("search_ovdb: No conclusive match found.")
+        top = ranked[:5] if ranked else []
+        if top:
+            print(
+                f"search_ovdb: No conclusive match — top {len(top)} candidate(s) (tied or zero):"
+            )
+            for ep in top:
+                hits = ", ".join(
+                    f"{p['person_name']}({p['credit_type']})"
+                    for p in ep.get("matched_people", [])
+                )
+                print(
+                    f"search_ovdb:   S{ep['season']:02d}E{ep['episode']:02d}"
+                    f" '{ep['title']}'"
+                    f" score={ep.get('match_count', 0)}"
+                    + (f" — {hits}" if hits else "")
+                )
+        else:
+            print("search_ovdb: No conclusive match found (no candidates).")
 
     metadata.ovdb = {
-        "shows": shows,
+        "shows": tvdb_shows,
         "ranked_episodes": ranked,
         "best_episode": best_episode,
     }

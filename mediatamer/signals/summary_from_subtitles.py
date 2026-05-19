@@ -16,11 +16,22 @@ def extract_summary_from_subtitles(metadata: "VideoMetadata", config: dict) -> D
         metadata.summary = dict()
         return dict()
 
-    prompt = f"""You are a TV/film analyst. Read the subtitle text below and return a JSON object with exactly this key:
+    prompt = f"""You are a TV/film analyst. The subtitles may be in any language. \
+YOUR RESPONSE MUST ALWAYS BE IN ENGLISH — translate if needed.
 
-- "summary": a 12 sentence synopsis IN English, present tense, third person, covering the main plot points in chronological order. Write it like an editorial description on TMDB/TVDB — specific enough to identify the episode uniquely. Naturally include key identifying terms: character names, place names, city names, location types, factions, races, organizations, or any other proper nouns that appear in the subtitles and help distinguish this story.
+Read the subtitle text below and return a JSON object with exactly this key:
 
-Rules: return ONLY valid JSON, no markdown, no extra text. All strings IN ENGLISH. Do not invent events not supported by the subtitles.
+- "summary": a 12-sentence synopsis written in ENGLISH, present tense, third person, \
+covering the main plot points in chronological order. Write it like an editorial description \
+on TMDB/TVDB — specific enough to identify the episode uniquely. Naturally include key \
+identifying terms: character names, place names, location types, factions, races, \
+organizations, or any other proper nouns that appear in the subtitles and help distinguish \
+this story.
+
+CRITICAL RULES:
+- The "summary" value MUST be written in ENGLISH regardless of the subtitle language.
+- Return ONLY valid JSON, no markdown, no extra text.
+- Do not invent events not supported by the subtitles.
 
 SUBTITLE TEXT:
 {metadata.subtitles}

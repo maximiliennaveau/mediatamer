@@ -36,129 +36,126 @@ class AIVideoMatcher:
         # Episodes with match_count >= 2 have at least two OCR-extracted people
         # confirmed in TMDB credits. Score them heuristically; if a clear winner
         # exists, skip the expensive LLM loop entirely.
-        ovdb_result = self._try_ovdb_candidates(meta, sub_text)
-        if ovdb_result:
-            meta.ai_match = ovdb_result
-            return
+        meta.ai_match = self._try_ovdb_candidates(meta, sub_text)
 
-        # ── Step 1: LLM iterative agentic loop (fallback) ────────────────────
-        search_history = []
-        max_iterations = 8
-        iteration = 0
+        # # ── Step 1: LLM iterative agentic loop (fallback) ────────────────────
+        # search_history = []
+        # max_iterations = 8
+        # iteration = 0
 
-        while iteration < max_iterations:
-            iteration += 1
-            print(f"\n[AI Agent Loop] Iteration {iteration}/{max_iterations}.")
-            prompt = self._build_agentic_prompt(meta, search_history)
-            response = run_ai(prompt, config, json_mode=True)
+        # while iteration < max_iterations:
+        #     iteration += 1
+        #     print(f"\n[AI Agent Loop] Iteration {iteration}/{max_iterations}.")
+        #     prompt = self._build_agentic_prompt(meta, search_history)
+        #     response = run_ai(prompt, config, json_mode=True)
 
-            try:
-                action = json.loads(response)
-            except Exception as e:
-                print(f"[AI Agent Loop] JSON Parsing Error: {e}")
-                meta.ai_match = {"error": f"Failed to parse LLM response: {e}"}
-                break
+        #     try:
+        #         action = json.loads(response)
+        #     except Exception as e:
+        #         print(f"[AI Agent Loop] JSON Parsing Error: {e}")
+        #         meta.ai_match = {"error": f"Failed to parse LLM response: {e}"}
+        #         break
 
-            status = action.get("status")
-            reasoning = action.get("reasoning", "No reasoning provided.")
-            print(f"  -> AI Status: {status}")
-            print(f"  -> AI Reasoning: {reasoning}")
+        #     status = action.get("status")
+        #     reasoning = action.get("reasoning", "No reasoning provided.")
+        #     print(f"  -> AI Status: {status}")
+        #     print(f"  -> AI Reasoning: {reasoning}")
 
-            if status == "FOUND":
-                show = action.get("show")
-                season = action.get("season")
-                episode_num = action.get("episode")
-                title = action.get("title")
-                video_type = action.get("type")
+        #     if status == "FOUND":
+        #         show = action.get("show")
+        #         season = action.get("season")
+        #         episode_num = action.get("episode")
+        #         title = action.get("title")
+        #         video_type = action.get("type")
 
-                # Verify with scoring to be safe
-                print(
-                    f"  -> Trying to verify AI's final answer: {show} S{season}E{episode_num}"
-                )
-                _, season_episodes = fetch_tmdb_episodes(
-                    show, season, self.tmdb_api_key
-                )
-                target_ep = next(
-                    (
-                        ep
-                        for ep in season_episodes
-                        if ep.get("episode_number") == episode_num
-                    ),
-                    None,
-                )
+        #         # Verify with scoring to be safe
+        #         print(
+        #             f"  -> Trying to verify AI's final answer: {show} S{season}E{episode_num}"
+        #         )
+        #         _, season_episodes = fetch_tmdb_episodes(
+        #             show, season, self.tmdb_api_key
+        #         )
+        #         target_ep = next(
+        #             (
+        #                 ep
+        #                 for ep in season_episodes
+        #                 if ep.get("episode_number") == episode_num
+        #             ),
+        #             None,
+        #         )
 
-                if target_ep:
-                    score_res = score_episode_match(
-                        target_ep,
-                        meta.path,
-                        _as_technical(meta.technical),
-                        sub_text=sub_text,
-                        context_hints={
-                            "is_likely_episode": (meta.guessit or {})
-                            .get("heuristics", {})
-                            .get("is_episode"),
-                            "season_number": season,
-                        },
-                    )
-                    final_score = score_res["score"]
-                    print(f"  -> Verification Score: {final_score}")
+        #         if target_ep:
+        #             score_res = score_episode_match(
+        #                 target_ep,
+        #                 meta.path,
+        #                 _as_technical(meta.technical),
+        #                 sub_text=sub_text,
+        #                 context_hints={
+        #                     "is_likely_episode": (meta.guessit or {})
+        #                     .get("heuristics", {})
+        #                     .get("is_episode"),
+        #                     "season_number": season,
+        #                 },
+        #             )
+        #             final_score = score_res["score"]
+        #             print(f"  -> Verification Score: {final_score}")
 
-                    meta.ai_match = {
-                        "show": show,
-                        "season": season,
-                        "episode": episode_num,
-                        "title": title or target_ep.get("name"),
-                        "best_candidate": target_ep,
-                        "score": final_score,
-                        "reasoning": reasoning + f" (Verified Score: {final_score})",
-                        "ai_full_response": action,
-                        "type": video_type,
-                        "phase": f"agent_found_iter_{iteration}",
-                    }
-                else:
-                    print(
-                        "  -> Could not locate the episode in TMDB to verify. Accepting blind AI response."
-                    )
-                    meta.ai_match = {
-                        "show": show,
-                        "season": season,
-                        "episode": episode_num,
-                        "title": title,
-                        "score": action.get("confidence_score", 0.0),
-                        "reasoning": reasoning,
-                        "ai_full_response": action,
-                        "phase": f"agent_found_unverified_iter_{iteration}",
-                    }
-                meta.ai_match["best_match"] = {
-                    "show_name": show,
-                    "season": season,
-                    "episode": episode_num,
-                    "title": meta.ai_match.get("title", ""),
-                }
-                break
+        #             meta.ai_match = {
+        #                 "show": show,
+        #                 "season": season,
+        #                 "episode": episode_num,
+        #                 "title": title or target_ep.get("name"),
+        #                 "best_candidate": target_ep,
+        #                 "score": final_score,
+        #                 "reasoning": reasoning + f" (Verified Score: {final_score})",
+        #                 "ai_full_response": action,
+        #                 "type": video_type,
+        #                 "phase": f"agent_found_iter_{iteration}",
+        #             }
+        #         else:
+        #             print(
+        #                 "  -> Could not locate the episode in TMDB to verify. Accepting blind AI response."
+        #             )
+        #             meta.ai_match = {
+        #                 "show": show,
+        #                 "season": season,
+        #                 "episode": episode_num,
+        #                 "title": title,
+        #                 "score": action.get("confidence_score", 0.0),
+        #                 "reasoning": reasoning,
+        #                 "ai_full_response": action,
+        #                 "phase": f"agent_found_unverified_iter_{iteration}",
+        #             }
+        #         meta.ai_match["best_match"] = {
+        #             "show_name": show,
+        #             "season": season,
+        #             "episode": episode_num,
+        #             "title": meta.ai_match.get("title", ""),
+        #         }
+        #         break
 
-            elif status == "SEARCHING":
-                queries = action.get("queries", [])
-                if not queries:
-                    print(
-                        "  -> AI returned SEARCHING but provided no queries. Stopping."
-                    )
-                    break
+        #     elif status == "SEARCHING":
+        #         queries = action.get("queries", [])
+        #         if not queries:
+        #             print(
+        #                 "  -> AI returned SEARCHING but provided no queries. Stopping."
+        #             )
+        #             break
 
-                print(f"  -> Queries: {queries}")
-                print(f"  -> Executing {len(queries)} queries...")
-                target_dur = meta.technical["duration"] if meta.technical else None
-                history_entry = self._execute_search_queries(queries, target_dur)
-                search_history.extend(history_entry)
+        #         print(f"  -> Queries: {queries}")
+        #         print(f"  -> Executing {len(queries)} queries...")
+        #         target_dur = meta.technical["duration"] if meta.technical else None
+        #         history_entry = self._execute_search_queries(queries, target_dur)
+        #         search_history.extend(history_entry)
 
-            else:
-                print(f"  -> Unknown status '{status}'. Stopping.")
-                break
-        else:
-            print("[AI Agent Loop] Max iterations reached without finding a match.")
-            meta.ai_match = {
-                "error": "Max iterations reached without finding an episode."
-            }
+        #     else:
+        #         print(f"  -> Unknown status '{status}'. Stopping.")
+        #         break
+        # else:
+        #     print("[AI Agent Loop] Max iterations reached without finding a match.")
+        #     meta.ai_match = {
+        #         "error": "Max iterations reached without finding an episode."
+        #     }
 
     def _try_ovdb_candidates(
         self,
@@ -179,10 +176,7 @@ class AIVideoMatcher:
         Returns a result dict on success, or None to fall through to the full LLM
         loop.
         """
-        ranked = (meta.ovdb or {}).get("ranked_episodes", [])
-        candidates = [ep for ep in ranked if ep.get("match_count", 0) >= 2]
-        if not candidates:
-            return None
+        candidates = (meta.ovdb or {}).get("ranked_episodes", [])
 
         # Use a single LLM call to compare overviews vs summary.
         subtitle_summary = (
@@ -392,6 +386,9 @@ class AIVideoMatcher:
             corresponds to by carefully comparing a summary extracted from its subtitles against a list
             of official episode overviews.
 
+            IMPORTANT: The subtitle summary may be in any language (e.g. French, Spanish,
+            German). Translate it mentally to compare with the English overviews.
+
             ## SUBTITLE SUMMARY
             {subtitle_summary}
 
@@ -400,21 +397,25 @@ class AIVideoMatcher:
 
             ## INSTRUCTIONS
             1. Read the subtitle summary carefully and extract the key plot elements:
-               - Who are the main characters and what are they doing?
-               - What is the main conflict or situation?
-               - What specific locations, objects, or events are mentioned?
+               - Where does the story take place? (underwater base, Arctic, space station, London…)
+               - What is the main threat or conflict? (ghosts, Daleks, Zygons, warlord…)
+               - What are the main characters doing?
+               - Are any supporting character names (not the Doctor / companion) mentioned?
             2. For EACH candidate, check whether its overview aligns with those plot elements.
-               Pay attention to specific details (character names, locations, threats) — do NOT
-               match on generic phrases like "the Doctor" or "Daleks" that could apply to many episodes.
+               - Unique LOCATIONS and specific THREATS are strong evidence of a match.
+               - Do NOT use "the Doctor" or companion names alone — they appear in every episode.
+               - For two-parters sharing the same location/threat, prefer part 1 if the summary
+                 describes a discovery/introduction, part 2 if it describes a resolution/escape.
             3. Pick the ONE candidate whose overview best fits the subtitle summary.
-            4. If no candidate is a good fit, return index 0.
+            4. If truly no candidate fits, return index 0.
 
             ## OUTPUT
             Return ONLY valid JSON with exactly these keys:
             - "plot_elements": short list of the key plot elements you extracted from the subtitle summary
             - "index": the 1-based number of the best matching candidate (integer, 0 if no match)
             - "reasoning": one sentence explaining why this candidate matches better than the others
-            - "confidence": integer 0-100 (be conservative — only use 80+ if there is a specific detail match)
+            - "confidence": integer 0-100 (use 60-80 when a unique location or threat clearly
+              matches; 80+ for multiple specific details; below 40 only when genuinely uncertain)
         """)
 
         print("[OVDB pre-filter] --- SUBTITLE SUMMARY ---")
@@ -647,8 +648,7 @@ to refine your identification.
 {summary_content}
 
 ### CAST PROFILE
-real_actors = {meta.cast_profile["real_actors"]}
-crew_names = {meta.cast_profile["crew_names"]}
+credits_names = {meta.cast_profile.get("credits_names", meta.cast_profile.get("real_actors", []) + meta.cast_profile.get("crew_names", []))}
 fictional_characters = {meta.cast_profile["fictional_characters"]}
         """
 
