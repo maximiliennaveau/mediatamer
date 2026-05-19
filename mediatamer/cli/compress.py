@@ -9,7 +9,7 @@ try:
 except ImportError:
     argcomplete = None
 from mediatamer.cli.argparse_utils import add_common_arguments
-from mediatamer.compress import compress_file
+from mediatamer.compress import compress_file, detect_hw_encoder
 from mediatamer.config import load_config
 from mediatamer.parameters import get_extensions
 from mediatamer.utils import extract_files_to_process
@@ -74,11 +74,11 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
         help="x265 profile to signal in the output (default: main)",
     )
     parser.add_argument(
-        "--nvenc",
+        "--no-hwenc",
         action="store_true",
         default=False,
-        help="Use NVIDIA NVENC hardware encoder (hevc_nvenc) instead of libx265."
-        " Much faster; requires an NVIDIA GPU with NVENC support.",
+        dest="no_hwenc",
+        help="Disable hardware encoder auto-detection and force software libx265.",
     )
     parser = add_common_arguments(parser)
     if argcomplete:
@@ -112,10 +112,17 @@ def main():
         exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.exts}
         files = [p for p in files if p.suffix.lower() in exts]
 
-    # Config key overrides the CLI default (False), but explicit --nvenc always wins.
     config = load_config(args.config)
-    if not args.nvenc:
-        args.nvenc = config.get("compress-use-nvenc", False)
+
+    # Auto-detect hardware encoder unless the user opted out
+    if args.no_hwenc:
+        hw_encoder = None
+    else:
+        hw_encoder = detect_hw_encoder()
+        if hw_encoder:
+            print(f"Hardware encoder detected: {hw_encoder}")
+        else:
+            print("No hardware encoder found, using software libx265.")
 
     # Check ffmpeg availability
     if shutil.which("ffmpeg") is None:
@@ -141,7 +148,7 @@ def main():
             preset=args.preset,
             tune=args.tune,
             profile=args.profile,
-            use_nvenc=args.nvenc,
+            hw_encoder=hw_encoder,
             apply=args.apply,
         )
 

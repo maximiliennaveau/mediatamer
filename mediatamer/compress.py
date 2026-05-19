@@ -105,6 +105,118 @@ def count_subtitle_streams(path: Path) -> int:
         return 0
 
 
+_HW_ENCODER_CANDIDATES = [
+    "hevc_nvenc",  # NVIDIA
+    "hevc_qsv",  # Intel Quick Sync
+    "hevc_amf",  # AMD AMF
+    "hevc_vaapi",  # Linux generic VA-API (Intel/AMD)
+    "hevc_videotoolbox",  # macOS
+]
+
+_HW_ENCODER_TEST_CMDS: dict[str, list[str]] = {
+    "hevc_nvenc": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=64x64:d=1",
+        "-c:v",
+        "hevc_nvenc",
+        "-f",
+        "null",
+        "-",
+    ],
+    "hevc_qsv": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=64x64:d=1",
+        "-c:v",
+        "hevc_qsv",
+        "-f",
+        "null",
+        "-",
+    ],
+    "hevc_amf": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=64x64:d=1",
+        "-c:v",
+        "hevc_amf",
+        "-f",
+        "null",
+        "-",
+    ],
+    "hevc_vaapi": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-vaapi_device",
+        "/dev/dri/renderD128",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=64x64:d=1",
+        "-vf",
+        "format=nv12,hwupload",
+        "-c:v",
+        "hevc_vaapi",
+        "-f",
+        "null",
+        "-",
+    ],
+    "hevc_videotoolbox": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "nullsrc=s=64x64:d=1",
+        "-c:v",
+        "hevc_videotoolbox",
+        "-f",
+        "null",
+        "-",
+    ],
+}
+
+
+def detect_hw_encoder() -> Optional[str]:
+    """Return the first working H.265 hardware encoder name, or None for software fallback.
+
+    Tries each candidate by running a short null encode.  The first encoder
+    whose test command exits with code 0 is returned.
+    """
+    for encoder in _HW_ENCODER_CANDIDATES:
+        test_cmd = _HW_ENCODER_TEST_CMDS.get(encoder)
+        if not test_cmd:
+            continue
+        try:
+            result = subprocess.run(
+                test_cmd, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                return encoder
+        except Exception:
+            continue
+    return None
+
+
 def is_already_compressed(path: Path, profile: Optional[str] = None) -> bool:
     """Return True if the first video stream is already H.264 or H.265-encoded.
 
@@ -153,22 +265,22 @@ def build_ffmpeg_cmd(
     preset: str,
     tune: Optional[str],
     profile: Optional[str],
-    use_nvenc: bool = False,
+    hw_encoder: Optional[str] = None,
 ) -> List[str]:
     """Build an ffmpeg command that re-encodes video and copies audio/subtitles.
 
-    When *use_nvenc* is True the NVIDIA NVENC hardware encoder is used instead
-    of libx265.  The quality parameter mapping is:
+    When *hw_encoder* is set to a hardware encoder name (e.g. ``hevc_nvenc``,
+    ``hevc_qsv``, ``hevc_amf``, ``hevc_vaapi``), that encoder is used instead
+    of the software ``libx265``.  Pass ``None`` to force software encoding.
 
-    * Encoder:  ``hevc_nvenc`` (NVENC H.265) instead of ``libx265``
-    * Quality:  ``-rc constqp -qp <crf>`` — NVENC has no CRF mode; QP is the
-      closest equivalent.  The same numeric value as the software CRF produces
-      slightly different (but comparable) quality.
-    * Preset:   NVENC uses ``p1``…``p7`` (p7 = best quality / slowest).
-      The software preset name is mapped automatically.
-    * Profile:  same ``-profile:v`` flag works for both encoders.
-    * Tune:     NVENC does not support the same tune names; ignored when NVENC
-      is active.
+    Quality / preset mapping per encoder family:
+
+    * **nvenc / qsv / amf**: ``-rc constqp -qp <crf>``; NVENC preset mapped to
+      ``p1``–``p7``; QSV/AMF accept the same software preset names.
+    * **vaapi**: requires ``-vaapi_device`` before the input and a
+      ``format=nv12,hwupload`` filter; quality via ``-qp``.
+    * **videotoolbox**: quality via ``-q:v``.
+    * **software (None)**: ``libx265 -crf``.
 
     The function returns a list suitable for ``subprocess.run``.
     """
@@ -184,22 +296,20 @@ def build_ffmpeg_cmd(
         "veryslow": "p7",
     }
 
-    cmd: list[str] = [
-        "ffmpeg",
-        "-hide_banner",
-        "-y",
-        "-threads",
-        "0",
-        "-i",
-        str(infile),
-    ]
+    cmd: list[str] = ["ffmpeg", "-hide_banner", "-y", "-threads", "0"]
+
+    # VAAPI requires the device to be declared before the input
+    if hw_encoder == "hevc_vaapi":
+        cmd += ["-vaapi_device", "/dev/dri/renderD128"]
+
+    cmd += ["-i", str(infile)]
     if srtfile:
         cmd += ["-i", str(srtfile)]
     cmd += ["-map", "0"]
     if srtfile:
         cmd += ["-map", "1"]
 
-    if use_nvenc:
+    if hw_encoder == "hevc_nvenc":
         nvenc_preset = _NVENC_PRESET_MAP.get(preset, "p7")
         video_args = [
             "-c:v",
@@ -211,12 +321,55 @@ def build_ffmpeg_cmd(
             "-preset",
             nvenc_preset,
             "-surfaces",
-            "64",  # increase concurrent surfaces for throughput
+            "64",
         ]
         if profile:
             video_args += ["-profile:v", profile]
-        # tune is not supported by hevc_nvenc — omitted intentionally
+        # tune not supported by hevc_nvenc — omitted intentionally
+    elif hw_encoder == "hevc_qsv":
+        video_args = [
+            "-c:v",
+            "hevc_qsv",
+            "-global_quality",
+            str(crf),
+            "-preset",
+            preset,
+        ]
+        if profile:
+            video_args += ["-profile:v", profile]
+    elif hw_encoder == "hevc_amf":
+        video_args = [
+            "-c:v",
+            "hevc_amf",
+            "-rc",
+            "cqp",
+            "-qp_i",
+            str(crf),
+            "-qp_p",
+            str(crf),
+        ]
+        if profile:
+            video_args += ["-profile:v", profile]
+    elif hw_encoder == "hevc_vaapi":
+        video_args = [
+            "-vf",
+            "format=nv12,hwupload",
+            "-c:v",
+            "hevc_vaapi",
+            "-qp",
+            str(crf),
+        ]
+    elif hw_encoder == "hevc_videotoolbox":
+        video_args = [
+            "-c:v",
+            "hevc_videotoolbox",
+            "-q:v",
+            str(crf),
+        ]
+        if profile:
+            video_args += ["-profile:v", profile]
     else:
+        # Software fallback
         video_args = ["-c:v", "libx265", "-crf", str(crf), "-preset", preset]
         if tune:
             video_args += ["-tune", tune]
@@ -240,7 +393,7 @@ def compress_file(
     preset: str = "veryslow",
     tune: Optional[str] = None,
     profile: Optional[str] = "main",
-    use_nvenc: bool = False,
+    hw_encoder: Optional[str] = None,
     apply: bool = False,
 ) -> Tuple[List[str], Optional[subprocess.CompletedProcess]]:
     """Build (and optionally run) the ffmpeg command for a single file.
@@ -262,7 +415,7 @@ def compress_file(
         preset,
         tune,
         profile,
-        use_nvenc=use_nvenc,
+        hw_encoder=hw_encoder,
     )
     if not apply:
         return cmd, None

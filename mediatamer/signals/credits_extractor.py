@@ -694,9 +694,6 @@ class VideoCreditsExtractor:
                 compact_lines.append(f"{hint}: {name}" if hint else name)
 
         compact_text = "\n".join(compact_lines)
-        print(
-            f"[Credits Extractor] Heuristics: {len(names)} candidate(s) before TMDB validation."
-        )
         return {
             "credits_names": names,
             "fictional_characters": [],

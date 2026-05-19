@@ -11,7 +11,7 @@ from mediatamer.config import load_config
 from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.extract_metada import extract_all_metadata
 from mediatamer.cli.argparse_utils import add_common_arguments
-from mediatamer.compress import compress_file
+from mediatamer.compress import compress_file, detect_hw_encoder
 from mediatamer.mkv_metadata import write_mkv_metadata
 from mediatamer.utils import (
     sanitize_filename,
@@ -71,11 +71,11 @@ def get_argument_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentPar
         help="x265 profile (default: main).",
     )
     parser.add_argument(
-        "--nvenc",
+        "--no-hwenc",
         action="store_true",
         default=False,
-        help="Use NVIDIA NVENC hardware encoder (hevc_nvenc) instead of libx265."
-        " Much faster; requires an NVIDIA GPU with NVENC support.",
+        dest="no_hwenc",
+        help="Disable hardware encoder auto-detection and force software libx265.",
     )
     parser = add_common_arguments(parser)
     return parser
@@ -97,9 +97,16 @@ def main():
         print("[DRY RUN] No files will be written. Pass --apply to execute.\n")
 
     config = load_config(args.config)
-    # Config key overrides the CLI default (False), but explicit --nvenc always wins.
-    if not args.nvenc:
-        args.nvenc = config.get("compress-use-nvenc", False)
+
+    # Auto-detect hardware encoder unless the user opted out
+    if args.no_hwenc:
+        hw_encoder = None
+    else:
+        hw_encoder = detect_hw_encoder()
+        if hw_encoder:
+            print(f"Hardware encoder detected: {hw_encoder}")
+        else:
+            print("No hardware encoder found, using software libx265.")
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()
@@ -154,7 +161,7 @@ def main():
             preset=args.preset,
             tune=args.tune,
             profile=args.profile,
-            use_nvenc=args.nvenc,
+            hw_encoder=hw_encoder,
             apply=args.apply,
         )
 
