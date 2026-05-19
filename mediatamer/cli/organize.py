@@ -117,7 +117,7 @@ def main():
     output_json_path = output_root / "metadata.json"
     output_data = {}
 
-    files = extract_files_to_process(input_root)
+    files = extract_files_to_process(input_root, config)
     for video_file in files:
         print(f"Processing: {video_file}")
 

@@ -94,7 +94,8 @@ def main():
     args = parser.parse_args()
 
     input_path = args.input.resolve()
-    files = extract_files_to_process(input_path) or []
+    config = load_config(args.config)
+    files = extract_files_to_process(input_path, config) or []
     if not files:
         return 0
 
@@ -111,8 +112,6 @@ def main():
     if args.exts:
         exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.exts}
         files = [p for p in files if p.suffix.lower() in exts]
-
-    config = load_config(args.config)
 
     # Auto-detect hardware encoder unless the user opted out
     if args.no_hwenc:

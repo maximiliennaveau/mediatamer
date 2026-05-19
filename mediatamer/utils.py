@@ -1,8 +1,10 @@
 """MediaTamer utility functions."""
 
+from collections import defaultdict
 from pathlib import Path
 from langdetect import detect
 import re
+from typing import Dict, Any
 
 from mediatamer.parameters import get_extensions
 
@@ -54,7 +56,7 @@ def detect_language(text: str) -> str:
     return detect(text)
 
 
-def extract_files_to_process(input_dir: Path):
+def extract_files_to_process(input_dir: Path, config: Dict[str, Any]):
     if input_dir.is_file():
         assert input_dir.suffix.lower() in get_extensions()
         return [input_dir]
@@ -66,20 +68,32 @@ def extract_files_to_process(input_dir: Path):
         print("No files found in", input_dir)
         return None
 
-    # config = load_config()
-    # threshold = config.get("batch-size-threshold")
-    # if threshold:
-    #     max_size = max((f.stat().st_size for f in files), default=0)
-    #     if max_size > 0:
-    #         limit = max_size * float(threshold)
-    #         original_count = len(files)
-    #         files = [f for f in files if f.stat().st_size >= limit]
-    #         if len(files) < original_count:
-    #             print(
-    #                 f"Filtered out {original_count - len(files)} files based on size threshold ({threshold})"
-    #             )
+    # Per-folder bonus filtering: within each folder, skip files whose size
+    # is below (threshold * max_file_size_in_folder).  This reliably removes
+    # small bonus/extra clips without touching genuine episode files.
+    threshold = config.get("bonus-size-threshold", 0.4)
+    by_folder: Dict[Path, list] = defaultdict(list)
+    for f in files:
+        by_folder[f.parent].append(f)
 
-    print(f"Found {len(files)} files to process:")
+    filtered = []
+    total_skipped = 0
+    for folder, folder_files in by_folder.items():
+        max_size = max(f.stat().st_size for f in folder_files)
+        limit = max_size * float(threshold)
+        kept = [f for f in folder_files if f.stat().st_size >= limit]
+        skipped = len(folder_files) - len(kept)
+        if skipped:
+            print(
+                f"[Bonus filter] Skipped {skipped} file(s) in {folder} "
+                f"(below {threshold * 100:.0f}% of largest file)"
+            )
+        filtered.extend(kept)
+        total_skipped += skipped
+
+    files = sorted(filtered)
+
+    print(f"Found {len(files)} files to process (skipped {total_skipped} bonus/extra):")
     for file in files:
         print(f"\t- {file}")
 

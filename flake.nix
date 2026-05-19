@@ -41,6 +41,7 @@
           pkgs.python3Packages.pyyaml
           pkgs.python3Packages.guessit
           pkgs.python3Packages.ollama
+          pkgs.python3Packages.tqdm
           pkgs.mkvtoolnix
         ];
         pyproject = true;

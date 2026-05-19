@@ -27,7 +27,7 @@ def main():
 
     input_dir = args.input.resolve()
 
-    files = extract_files_to_process(input_dir)
+    files = extract_files_to_process(input_dir, config)
     metadata_list = {}
     for f in files:
         try:
