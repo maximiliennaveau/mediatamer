@@ -16,6 +16,14 @@ def extract_summary_from_subtitles(metadata: "VideoMetadata", config: dict) -> D
         metadata.summary = dict()
         return dict()
 
+    # Truncate subtitle text to avoid exceeding the model context window.
+    # num_ctx defaults to 16384 tokens (~65000 chars); reserve ~12000 chars for
+    # the prompt template and the JSON output, leaving ~53000 chars for subtitles.
+    _MAX_SUBTITLE_CHARS = 53_000
+    subtitle_text = metadata.subtitles
+    if len(subtitle_text) > _MAX_SUBTITLE_CHARS:
+        subtitle_text = subtitle_text[:_MAX_SUBTITLE_CHARS]
+
     prompt = f"""You are a TV/film analyst. The subtitles may be in any language. \
 YOUR RESPONSE MUST ALWAYS BE IN ENGLISH — translate if needed.
 
@@ -34,7 +42,7 @@ CRITICAL RULES:
 - Do not invent events not supported by the subtitles.
 
 SUBTITLE TEXT:
-{metadata.subtitles}
+{subtitle_text}
     """
 
     json_response = run_ai(prompt, config, json_mode=True)

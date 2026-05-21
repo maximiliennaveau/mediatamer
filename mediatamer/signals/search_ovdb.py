@@ -1035,7 +1035,7 @@ def search_ovdb(metadata: VideoMetadata, config: dict) -> bool:
         f"search_ovdb: Best show: {show_name}"
         f" id:{show_id} — {best_tvdb['match_count']} people matched"
     )
-    for p in best_tvdb["people"][:5]:
+    for p in best_tvdb["people"]:
         print(
             f"search_ovdb:   '{p['ocr_name']}' → {p['person_name']}"
             f" ({p['people_type']}, char='{p['character']}')"

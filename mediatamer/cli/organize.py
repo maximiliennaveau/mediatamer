@@ -11,7 +11,11 @@ from mediatamer.config import load_config
 from mediatamer.signals.video_metadata import VideoMetadata
 from mediatamer.extract_metada import extract_all_metadata
 from mediatamer.cli.argparse_utils import add_common_arguments
-from mediatamer.compress import compress_file, detect_hw_encoder
+from mediatamer.compress import (
+    compress_file,
+    detect_hw_encoder,
+    get_hw_encoder_diagnostics,
+)
 from mediatamer.mkv_metadata import write_mkv_metadata
 from mediatamer.utils import (
     sanitize_filename,
@@ -107,6 +111,10 @@ def main():
             print(f"Hardware encoder detected: {hw_encoder}")
         else:
             print("No hardware encoder found, using software libx265.")
+            diagnostics = get_hw_encoder_diagnostics()
+            if diagnostics:
+                for encoder, reason in diagnostics.items():
+                    print(f"  - {encoder}: {reason}")
 
     input_root = args.input.resolve()
     output_root = args.output.resolve()

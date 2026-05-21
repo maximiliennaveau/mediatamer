@@ -9,7 +9,11 @@ try:
 except ImportError:
     argcomplete = None
 from mediatamer.cli.argparse_utils import add_common_arguments
-from mediatamer.compress import compress_file, detect_hw_encoder
+from mediatamer.compress import (
+    compress_file,
+    detect_hw_encoder,
+    get_hw_encoder_diagnostics,
+)
 from mediatamer.config import load_config
 from mediatamer.parameters import get_extensions
 from mediatamer.utils import extract_files_to_process
@@ -122,6 +126,10 @@ def main():
             print(f"Hardware encoder detected: {hw_encoder}")
         else:
             print("No hardware encoder found, using software libx265.")
+            diagnostics = get_hw_encoder_diagnostics()
+            if diagnostics:
+                for encoder, reason in diagnostics.items():
+                    print(f"  - {encoder}: {reason}")
 
     # Check ffmpeg availability
     if shutil.which("ffmpeg") is None:

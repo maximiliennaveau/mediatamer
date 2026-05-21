@@ -141,6 +141,7 @@ class OllamaClient:
                 options={
                     "temperature": 0,
                     "num_ctx": num_ctx,
+                    "num_predict": -1,
                 },
                 keep_alive=keep_alive,
             )
@@ -148,7 +149,9 @@ class OllamaClient:
         except Exception as e:
             print(f"Ollama Library Error: {e}")
             # Fallback to direct request if library fails
-            return self._generate_fallback(prompt, target_model, json_mode, num_ctx, keep_alive)
+            return self._generate_fallback(
+                prompt, target_model, json_mode, num_ctx, keep_alive
+            )
 
     def _generate_fallback(
         self, prompt: str, model: str, json_mode: bool, num_ctx: int, keep_alive: Any
@@ -164,7 +167,7 @@ class OllamaClient:
                 "prompt": prompt,
                 "stream": False,
                 "format": "json" if json_mode else None,
-                "options": {"temperature": 0, "num_ctx": num_ctx},
+                "options": {"temperature": 0, "num_ctx": num_ctx, "num_predict": -1},
                 "keep_alive": keep_alive,
             }
             endpoint = f"{self.api_url.rstrip('/')}/api/generate"
@@ -205,5 +208,9 @@ def ensure_model_exists(model: str, client: Any = None, api_url: str = None):
     OllamaClient().ensure_model_exists(model)
 
 
-__all__ = ["run_ai", "OllamaClient", "ensure_ollama_server_running", "ensure_model_exists"]
-
+__all__ = [
+    "run_ai",
+    "OllamaClient",
+    "ensure_ollama_server_running",
+    "ensure_model_exists",
+]

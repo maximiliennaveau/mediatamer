@@ -99,7 +99,7 @@ def count_subtitle_streams(path: Path) -> int:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if res.returncode != 0:
             return 0
-        lines = [l for l in res.stdout.splitlines() if l.strip()]
+        lines = [line for line in res.stdout.splitlines() if line.strip()]
         return len(lines)
     except Exception:
         return 0
@@ -195,6 +195,14 @@ _HW_ENCODER_TEST_CMDS: dict[str, list[str]] = {
     ],
 }
 
+# Populated by detect_hw_encoder() for user-facing diagnostics.
+_LAST_HW_ENCODER_ERRORS: dict[str, str] = {}
+
+
+def get_hw_encoder_diagnostics() -> dict[str, str]:
+    """Return per-encoder probe failures from the last hardware detection run."""
+    return dict(_LAST_HW_ENCODER_ERRORS)
+
 
 def detect_hw_encoder() -> Optional[str]:
     """Return the first working H.265 hardware encoder name, or None for software fallback.
@@ -202,6 +210,7 @@ def detect_hw_encoder() -> Optional[str]:
     Tries each candidate by running a short null encode.  The first encoder
     whose test command exits with code 0 is returned.
     """
+    _LAST_HW_ENCODER_ERRORS.clear()
     for encoder in _HW_ENCODER_CANDIDATES:
         test_cmd = _HW_ENCODER_TEST_CMDS.get(encoder)
         if not test_cmd:
@@ -212,7 +221,20 @@ def detect_hw_encoder() -> Optional[str]:
             )
             if result.returncode == 0:
                 return encoder
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                # Keep only the first non-empty line for concise CLI output.
+                first_line = next(
+                    (line.strip() for line in stderr.splitlines() if line.strip()),
+                    "",
+                )
+                _LAST_HW_ENCODER_ERRORS[encoder] = first_line
+            else:
+                _LAST_HW_ENCODER_ERRORS[encoder] = (
+                    f"probe failed with exit code {result.returncode}"
+                )
         except Exception:
+            _LAST_HW_ENCODER_ERRORS[encoder] = "probe raised an exception"
             continue
     return None
 

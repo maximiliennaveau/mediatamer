@@ -13,6 +13,7 @@
         inherit system;
         config = {
           allowUnfree = true;
+          cudaSupport = true;
         };
       };
     in
@@ -31,7 +32,7 @@
           pkgs.python3Packages.pytestCheckHook
         ];
         propagatedBuildInputs = [
-          pkgs.ffmpeg
+          pkgs.ffmpeg-full
           pkgs.tesseract
           pkgs.python3Packages.argcomplete
           pkgs.python3Packages.requests
